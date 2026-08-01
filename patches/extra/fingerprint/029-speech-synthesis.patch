@@ -1,0 +1,25 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/modules/speech/speech_synthesis.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/speech/speech_synthesis.cc	2026-08-01 16:27:30
+@@ -27,7 +27,9 @@
+ 
+ #include <tuple>
+ 
++#include "base/command_line.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -96,6 +98,12 @@
+ }
+ 
+ const HeapVector<Member<SpeechSynthesisVoice>>& SpeechSynthesis::getVoices() {
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kFingerprint)) {
++    DEFINE_STATIC_LOCAL(HeapVector<Member<SpeechSynthesisVoice>>, empty_voices,
++                        ());
++    return empty_voices;
++  }
+   // Kick off initialization here to ensure voice list gets populated.
+   std::ignore = TryEnsureMojomSynthesis();
+   return voice_list_;

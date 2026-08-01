@@ -1,0 +1,72 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/modules/netinfo/network_information.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/netinfo/network_information.cc	2026-08-01 16:25:01
+@@ -6,7 +6,9 @@
+ 
+ #include <algorithm>
+ 
++#include "base/command_line.h"
+ #include "base/time/time.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
+ #include "third_party/blink/public/platform/task_type.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_connection_type.h"
+@@ -84,6 +86,11 @@
+ }
+ 
+ V8ConnectionType NetworkInformation::type() const {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(::switches::kFingerprint))
++    return V8ConnectionType(V8ConnectionType::Enum::kEthernet);
++
+   if (RuntimeEnabledFeatures::NetInfoConstantTypeEnabled()) {
+     return V8ConnectionType(V8ConnectionType::Enum::kUnknown);
+   }
+@@ -111,6 +118,11 @@
+ }
+ 
+ V8EffectiveConnectionType NetworkInformation::effectiveType() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(::switches::kFingerprint))
++    return V8EffectiveConnectionType(V8EffectiveConnectionType::Enum::k4G);
++
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<WebEffectiveConnectionType> override_ect =
+       GetNetworkStateNotifier().GetWebHoldbackEffectiveType();
+@@ -132,6 +144,11 @@
+ }
+ 
+ uint32_t NetworkInformation::rtt() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(::switches::kFingerprint))
++    return 50;
++
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<base::TimeDelta> override_rtt =
+       GetNetworkStateNotifier().GetWebHoldbackHttpRtt();
+@@ -148,6 +165,11 @@
+ }
+ 
+ double NetworkInformation::downlink() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(::switches::kFingerprint))
++    return 10;
++
+   MaybeShowWebHoldbackConsoleMsg();
+   std::optional<double> override_downlink_mbps =
+       GetNetworkStateNotifier().GetWebHoldbackDownlinkThroughputMbps();
+@@ -165,6 +187,11 @@
+ }
+ 
+ bool NetworkInformation::saveData() const {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(::switches::kFingerprint))
++    return false;
++
+   bool save_data =
+       IsObserving() ? save_data_ : GetNetworkStateNotifier().SaveDataEnabled();
+ 

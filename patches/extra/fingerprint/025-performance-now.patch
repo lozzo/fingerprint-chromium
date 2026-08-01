@@ -1,0 +1,31 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/core/timing/performance.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/timing/performance.cc	2026-08-01 16:24:39
+@@ -41,6 +41,11 @@
+ #include "base/time/default_clock.h"
+ #include "base/time/default_tick_clock.h"
+ #include "base/time/time.h"
++#include <cmath>
++
++#include "base/command_line.h"
++#include "base/strings/string_util.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/mojom/permissions_policy/document_policy_feature.mojom-blink.h"
+@@ -1268,7 +1273,15 @@
+ }
+ 
+ DOMHighResTimeStamp Performance::now() const {
+-  return MonotonicTimeToDOMHighResTimeStamp(tick_clock_->NowTicks());
++  DOMHighResTimeStamp result =
++      MonotonicTimeToDOMHighResTimeStamp(tick_clock_->NowTicks());
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(::switches::kFingerprint)) {
++    double rounded = std::round(result / 100.0) * 100.0;
++    return rounded;
++  }
++  return result;
+ }
+ 
+ // static

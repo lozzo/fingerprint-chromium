@@ -134,3 +134,11 @@ extra/fingerprint/021-css-outer-window.patch
 extra/fingerprint/022-webrtc-ip-leak.patch
 extra/fingerprint/023-mediadevices-enum.patch
 extra/fingerprint/024-navigator-language.patch
+extra/fingerprint/025-performance-now.patch
+extra/fingerprint/026-max-touch-points.patch
+extra/fingerprint/027-plugins.patch
+extra/fingerprint/028-network-info.patch
+extra/fingerprint/029-speech-synthesis.patch
+extra/fingerprint/030-gamepad.patch
+extra/fingerprint/031-webgpu.patch
+extra/fingerprint/032-accept-language.patch

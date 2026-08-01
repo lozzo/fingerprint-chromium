@@ -1,0 +1,36 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/core/loader/frame_fetch_context.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/loader/frame_fetch_context.cc	2026-08-01 16:27:37
+@@ -36,10 +36,12 @@
+ 
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "build/build_config.h"
++#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include "mojo/public/cpp/bindings/associated_remote.h"
+ #include "net/http/structured_headers.h"
+ #include "services/network/public/cpp/client_hints.h"
+@@ -726,6 +728,8 @@
+ 
+   // Only send User Agent hints if the info is available
+   if (ua) {
++    UpdateUserAgentMetadataFingerprint(&ua.value());
++
+     // ShouldSendClientHint is called to make sure UA is controlled by
+     // Permissions Policy.
+     if (ShouldSendClientHint(*policy, resource_origin, is_1p_origin,
+@@ -1001,6 +1005,11 @@
+     const ResourceLoaderOptions& options) {
+   AddClientHintsIfNecessary(resource_width, request);
+   AddReducedAcceptLanguageIfNecessary(request);
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kFingerprint)) {
++    request.SetHttpHeaderField(http_names::kAcceptLanguage,
++                               AtomicString("en-US,en;q=0.9"));
++  }
+ }
+ 
+ bool FrameFetchContext::StartSpeculativeImageDecode(Resource* resource) {

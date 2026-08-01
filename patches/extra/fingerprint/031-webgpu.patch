@@ -1,0 +1,31 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc	2026-08-01 16:27:34
+@@ -4,6 +4,8 @@
+ 
+ #include "third_party/blink/renderer/modules/webgpu/gpu_adapter.h"
+ 
++#include "base/command_line.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
+@@ -113,6 +115,19 @@
+   subgroup_max_size_ = info.subgroupMaxSize;
+   power_preference_ = powerProperties.powerPreference;
+ 
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kFingerprint)) {
++#if BUILDFLAG(IS_MAC)
++    vendor_ = "Apple";
++    architecture_ = "Apple GPU";
++#else
++    vendor_ = "NVIDIA";
++    architecture_ = "Ampere";
++#endif
++    device_ = "";
++    description_ = "";
++  }
++
+   features_ = MakeFeatureNameSet(GetHandle());
+ 
+   GPUSupportedLimits::ComboLimits limits;
