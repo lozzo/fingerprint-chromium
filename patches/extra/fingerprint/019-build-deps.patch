@@ -1,0 +1,76 @@
+diff --git a/components/embedder_support/BUILD.gn b/components/embedder_support/BUILD.gn
+--- a/components/embedder_support/BUILD.gn
++++ b/components/embedder_support/BUILD.gn
+
+@@ -60,6 +60,7 @@
+     "//build:branding_buildflags",
+     "//components/policy/core/common",
+     "//components/prefs",
++    "//components/ungoogled",
+     "//components/version_info",
+     "//net",
+     "//third_party/blink/public/common:headers",
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+
+@@ -166,6 +166,7 @@
+     "//components/tracing:tracing_config",
+     "//components/ukm",
+     "//components/ukm/debug:util",
++    "//components/ungoogled",
+     "//components/url_formatter",
+     "//components/url_matcher",
+     "//components/variations",
+
+diff --git a/third_party/blink/common/BUILD.gn b/third_party/blink/common/BUILD.gn
+--- a/third_party/blink/common/BUILD.gn
++++ b/third_party/blink/common/BUILD.gn
+
+@@ -309,6 +309,7 @@
+     "//base",
+     "//build:android_buildflags",
+     "//build:chromecast_buildflags",
++    "//components/ungoogled",
+     "//media/capture:capture_base",
+     "//media/capture/mojom:video_capture_mojom_support",
+     "//mojo/public/cpp/system",
+
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+
+@@ -408,6 +408,7 @@
+     "//base",
+     "//components/attribution_reporting",
+     "//components/attribution_reporting:mojom_blink",
++    "//components/ungoogled",
+     "//components/paint_preview/common",
+     "//components/performance_manager/public/mojom:mojom_blink",
+     "//components/shared_highlighting/core/common",
+
+diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
+--- a/third_party/blink/renderer/modules/BUILD.gn
++++ b/third_party/blink/renderer/modules/BUILD.gn
+
+@@ -202,6 +202,7 @@
+     "//cc",
+     "//components/webrtc:thread_wrapper",
++    "//components/ungoogled",
+     "//gin",
+     "//net",
+     "//third_party/blink/renderer/bindings/modules/v8:generated",
+
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+
+@@ -1811,6 +1811,7 @@
+     "//cc/ipc",
+     "//cc/mojo_embedder",
+     "//components/input",
++    "//components/ungoogled",
+     "//components/language_detection/content/common",
+     "//components/language_detection/content/common:common_blink",
+     "//components/language_detection/content/renderer",

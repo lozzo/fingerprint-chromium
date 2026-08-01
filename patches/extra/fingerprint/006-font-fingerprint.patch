@@ -1,8 +1,8 @@
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index a674a14962..bb5bfbb5f3 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
-@@ -32,14 +32,17 @@
+
+@@ -32,15 +32,18 @@
  #include <limits>
  #include <memory>
  
@@ -16,15 +16,16 @@ index a674a14962..bb5bfbb5f3 100644
  #include "base/timer/elapsed_timer.h"
  #include "base/trace_event/process_memory_dump.h"
  #include "base/trace_event/trace_event.h"
-+#include "components/ungoogled/ungoogled_switches.h"
  #include "build/build_config.h"
++#include "components/ungoogled/ungoogled_switches.h"
  #include "skia/ext/font_utils.h"
  #include "third_party/blink/public/common/features.h"
-@@ -124,6 +127,120 @@ const FontPlatformData* FontCache::SystemFontPlatformData(
+ #include "third_party/blink/public/platform/platform.h"
+@@ -122,7 +125,114 @@
+                              AlternateFontName::kNoAlternate);
  }
  #endif
- 
-+// 获取平台特定的字体列表
++
 +static std::vector<std::string> GetPlatformFonts(const std::string& platform) {
 +  if (platform == "windows") {
 +    return {
@@ -62,7 +63,7 @@ index a674a14962..bb5bfbb5f3 100644
 +      "K2D", "Kai", "Kailasa", "Kaiti SC", "Kaiti TC", "Kannada MN", "Kannada Sangam MN", "Katari", "Kavivanar", "Kefa", "Khmer MN", "Khmer Sangam MN", "Kigelia", "Kigelia Arabic", "Klee", "Kodchasan", "Kohinoor Bangla", "Kohinoor Devanagari", "Kohinoor Gujarati", "Kohinoor Telugu", "KoHo", "Kokonor", "Koufi Abjadi", "Krub", "Krungthep", "KufiStandardGK",
 +      "Lahore Gurmukhi", "Laimoon", "Lantinghei SC", "Lantinghei TC", "Lao MN", "Lao Sangam MN", "Lava Devanagari", "Lava Kannada", "Lava Telugu", "Libian SC", "Libian TC", "LiHei Pro", "LingWai SC", "LingWai TC", "LiSong Pro", "Lucida Grande", "Luminari",
 +      "Maku", "Malayalam MN", "Malayalam Sangam MN", "Mali", "Marion", "Marker Felt", "Menlo", "Microsoft Sans Serif", "Mishafi", "Mishafi Gold", "Modak", "Mona Lisa Solid ITC TT", "Monaco", "Mshtakan", "Mukta", "Mukta Malar", "Mukta Vaani", "MuktaMahee", "Muna", "Myanmar MN", "Myanmar Sangam MN", "Myriad Arabic",
-+      "Nadeem", "Nanum Brush Script", "Nanum Pen Script", "NanumGothic", "NanumMyeongjo", "New Peninim MT", "Niramit", "Nisan", "Nom Na Tong", "Noteworthy", "Noto Nastaliq Urdu", "Noto Sans Adlam", "Noto Sans Armenian", "Noto Sans Avestan", "Noto Sans Bamum", "Noto Sans Bassa Vah", "Noto Sans Batak", "Noto Sans Bhaiksuki", "Noto Sans Brahmi", "Noto Sans Buginese", "Noto Sans Buhid", "Noto Sans Canadian Aboriginal", "Noto Sans Carian", "Noto Sans Caucasian Albanian", "Noto Sans Chakma", "Noto Sans Cham", "Noto Sans Coptic", "Noto Sans Cuneiform", "Noto Sans Cypriot", "Noto Sans Duployan", "Noto Sans Egyptian Hieroglyphs", "Noto Sans Elbasan", "Noto Sans Glagolitic", "Noto Sans Gothic", "Noto Sans Gunjala Gondi", "Noto Sans Hanifi Rohingya", "Noto Sans Hanunoo", "Noto Sans Hatran", "Noto Sans Imperial Aramaic", "Noto Sans Inscriptional Pahlavi", "Noto Sans Inscriptional Parthian", "Noto Sans Javanese", "Noto Sans Kaithi", "Noto Sans Kannada", "Noto Sans Kayah Li", "Noto Sans Kharoshthi", "Noto Sans Khojki", "Noto Sans Khudawadi", "Noto Sans Lepcha", "Noto Sans Limbu", "Noto Sans Linear A", "Noto Sans Linear B", "Noto Sans Lisu", "Noto Sans Lycian", "Noto Sans Lydian", "Noto Sans Mahajani", "Noto Sans Mandaic", "Noto Sans Manichaean", "Noto Sans Marchen", "Noto Sans Masaram Gondi", "Noto Sans Meetei Mayek", "Noto Sans Mende Kikakui", "Noto Sans Meroitic", "Noto Sans Miao", "Noto Sans Modi", "Noto Sans Mongolian", "Noto Sans Mro", "Noto Sans Multani", "Noto Sans Myanmar", "Noto Sans Nabataean", "Noto Sans New Tai Lue", "Noto Sans Newa", "Noto Sans NKo", "Noto Sans Ol Chiki", "Noto Sans Old Hungarian", "Noto Sans Old Italic", "Noto Sans Old North Arabian", "Noto Sans Old Permic", "Noto Sans Old Persian", "Noto Sans Old South Arabian", "Noto Sans Old Turkic", "Noto Sans Oriya", "Noto Sans Osage", "Noto Sans Osmanya", "Noto Sans Pahawh Hmong", "Noto Sans Palmyrene", "Noto Sans Pau Cin Hau", "Noto Sans PhagsPa", "Noto Sans Phoenician", "Noto Sans Psalter Pahlavi", "Noto Sans Rejang", "Noto Sans Samaritan", "Noto Sans Saurashtra", "Noto Sans Sharada", "Noto Sans Siddham", "Noto Sans Sora Sompeng", "Noto Sans Sundanese", "Noto Sans Syloti Nagri", "Noto Sans Syriac", "Noto Sans Tagalog", "Noto Sans Tagbanwa", "Noto Sans Tai Le", "Noto Sans Tai Tham", "Noto Sans Tai Viet", "Noto Sans Takri", "Noto Sans Thaana", "Noto Sans Tifinagh", "Noto Sans Tirhuta", "Noto Sans Ugaritic", "Noto Sans Vai", "Noto Sans Wancho", "Noto Sans Warang Citi", "Noto Sans Yi", "Noto Sans Zawgyi", "Noto Serif Ahom", "Noto Serif Balinese", "Noto Serif Hmong Nyiakeng", "Noto Serif Kannada", "Noto Serif Myanmar", "Noto Serif Yezidi", "November Bangla Traditional",
++      "Nadeem", "Nanum Brush Script", "Nanum Pen Script", "NanumGothic", "NanumMyeongjo", "New Peninim MT", "Niramit", "Nisan", "Nom Na Tong", "Noteworthy", "Noto Nastaliq Urdu", "Noto Sans Adlam", "Noto Sans Armenian", "Noto Sans Avestan", "Noto Sans Bamum", "Noto Sans Bassa Vah", "Noto Sans Batak", "Noto Sans Bhaiksuki", "Noto Sans Brahmi", "Noto Sans Buginese", "Noto Sans Buhid", "Noto Sans Canadian Aboriginal", "Noto Sans Carian", "Noto Sans Caucasian Albanian", "Noto Sans Chakma", "Noto Sans Cham", "Noto Sans Coptic", "Noto Sans Cuneiform", "Noto Sans Cypriot", "Noto Sans Duployan", "Noto Sans Egyptian Hieroglyphs", "Noto Sans Elbasan", "Noto Sans Glagolitic", "Noto Sans Gothic", "Noto Sans Gunjala Gondi", "Noto Sans Hanifi Rohingya", "Noto Sans Hanunoo", "Noto Sans Hatran", "Noto Sans Imperial Aramaic", "Noto Sans Inscriptional Pahlavi", "Noto Sans Inscriptional Parthian", "Noto Sans Javanese", "Noto Sans Kaithi", "Noto Sans Kannada", "Noto Sans Kayah Li", "Noto Sans Kharoshthi", "Noto Sans Khojki", "Noto Sans Khudawadi", "Noto Sans Lepcha", "Noto Sans Limbu", "Noto Sans Linear A", "Noto Sans Linear B", "Noto Sans Lisu", "Noto Sans Lycian", "Noto Sans Lydian", "Noto Sans Mahajani", "Noto Sans Mandaic", "Noto Sans Manichaean", "Noto Sans Marchen", "Noto Sans Masaram Gondi", "Noto Sans Meetei Mayek", "Noto Sans Mende Kikakui", "Noto Sans Meroitic", "Noto Sans Miao", "Noto Sans Modi", "Noto Sans Mongolian", "Noto Sans Mro", "Noto Sans Multani", "Noto Sans Myanmar", "Noto Sans Nabataean", "Noto Sans New Tai Lue", "Noto Sans Newa", "Noto Sans NKo", "Noto Sans Ol Chiki", "Noto Sans Old Hungarian", "Noto Sans Old Italic", "Noto Sans Old North Arabian", "Noto Sans Old Permic", "Noto Sans Old Persian", "Noto Sans Old South Arabian", "Noto Sans Old Turkic", "Noto Sans Oriya", "Noto Sans Osage", "Noto Sans Osmanya", "Noto Sans Pahawh Hmong", "Noto Sans Palmyrene", "Noto Sans Pau Cin Hau", "Noto Sans PhagsPa", "Noto Sans Phoenician", "Noto Sans Psalter Pahlavi", "Noto Sans Rejang", "Noto Sans Runic", "Noto Sans Samaritan", "Noto Sans Saurashtra", "Noto Sans Sharada", "Noto Sans Shavian", "Noto Sans Siddham", "Noto Sans Sinhala", "Noto Sans Sora Sompeng", "Noto Sans Soyombo", "Noto Sans Sundanese", "Noto Sans Syloti Nagri", "Noto Sans Symbols", "Noto Sans Syriac", "Noto Sans Tagalog", "Noto Sans Tagbanwa", "Noto Sans Tai Le", "Noto Sans Tai Tham", "Noto Sans Tai Viet", "Noto Sans Takri", "Noto Sans Tamil", "Noto Sans Tamil Supplement", "Noto Sans Telugu", "Noto Sans Thaana", "Noto Sans Thai", "Noto Sans Tibetan", "Noto Sans Tifinagh", "Noto Sans Tirhuta", "Noto Sans Ugaritic", "Noto Sans Vai", "Noto Sans Wancho", "Noto Sans Warang Citi", "Noto Sans Yi", "Noto Sans Zanabazar Square", "Noto Serif", "Noto Serif Ahom", "Noto Serif Armenian", "Noto Serif Balinese", "Noto Serif Bengali", "Noto Serif Devanagari", "Noto Serif Display", "Noto Serif Dogra", "Noto Serif Ethiopic", "Noto Serif Georgian", "Noto Serif Grantha", "Noto Serif Gujarati", "Noto Serif Gurmukhi", "Noto Serif Hebrew", "Noto Serif Kannada", "Noto Serif Khmer", "Noto Serif Lao", "Noto Serif Malayalam", "Noto Serif Myanmar", "Noto Serif Nyiakeng Puachue Hmong", "Noto Serif Oriya", "Noto Serif Sinhala", "Noto Serif Tamil", "Noto Serif Telugu", "Noto Serif Thai", "Noto Serif Tibetan", "Noto Serif Yezidi",
 +      "October Compressed Devanagari", "October Compressed Gujarati", "October Compressed Gurmukhi", "October Compressed Kannada", "October Compressed Meetei Mayek", "October Compressed Odia", "October Compressed Ol Chiki", "October Compressed Tamil", "October Compressed Telugu", "October Condensed Devanagari", "October Condensed Gujarati", "October Condensed Gurmukhi", "October Condensed Kannada", "October Condensed Meetei Mayek", "October Condensed Odia", "October Condensed Ol Chiki", "October Condensed Tamil", "October Condensed Telugu", "October Devanagari", "October Gujarati", "October Gurmukhi", "October Kannada", "October Meetei Mayek", "October Odia", "October Ol Chiki", "October Tamil", "October Telugu", "Optima", "Oriya MN", "Oriya Sangam MN", "Osaka", "Osaka-Mono",
 +      "Padyakke Expanded One", "Palatino", "Papyrus", "Party LET", "PCMyungjo", "Phosphate", "PilGi", "PingFang HK", "PingFang MO", "PingFang SC", "PingFang TC", "Plantagenet Cherokee", "PortagoITC TT", "Princetown LET", "Produkt", "Proxima Nova", "PSL Ornanong Pro", "PT Mono", "PT Sans", "PT Sans Caption", "PT Sans Narrow", "PT Serif", "PT Serif Caption", "Publico Headline", "Publico Text",
 +      "Quotes Caps", "Quotes Script",
@@ -97,14 +98,11 @@ index a674a14962..bb5bfbb5f3 100644
 +  return {};
 +}
 +
-+// 判断是否为基础字体（不应被处理）
 +static bool IsBasicFont(const std::string& font_family) {
 +  static const std::set<std::string> basic_fonts = {
-+    // 系统特殊字体
 +    "-webkit-standard",
 +    "system-ui",
 +
-+    // 基础西文字体
 +    "Arial",
 +    "Calibri",
 +    "Courier New",
@@ -121,8 +119,7 @@ index a674a14962..bb5bfbb5f3 100644
 +    "Segoe UI",
 +    "Times New Roman",
 +    "Times",
-+
-+    // CSS通用字体
+ 
 +    "cursive",
 +    "fantasy",
 +    "monospace",
@@ -130,23 +127,20 @@ index a674a14962..bb5bfbb5f3 100644
 +    "serif",
 +    "math",
 +
-+    // 系统字体别名
 +    "BlinkMacSystemFont"
 +  };
 +
 +  return basic_fonts.count(font_family) > 0;
 +}
 +
-+
  const FontPlatformData* FontCache::GetFontPlatformData(
      const FontDescription& font_description,
      const FontFaceCreationParams& creation_params,
-@@ -142,6 +259,74 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+@@ -141,6 +251,64 @@
    }
  #endif
  
 +  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-+  // 字体指纹处理逻辑 - 不应用于最后手段字体
 +  if (command_line->HasSwitch(switches::kFingerprint) &&
 +      (!command_line->HasSwitch(switches::kDisableSpoofing) ||
 +       command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("font") == std::string::npos) &&
@@ -155,13 +149,11 @@ index a674a14962..bb5bfbb5f3 100644
 +
 +    const std::string requested_family = creation_params.Family().Utf8();
 +
-+    // 基础字体直接返回，不进行任何处理
 +    if (IsBasicFont(requested_family)) {
 +      return font_platform_data_cache_.GetOrCreateFontPlatformData(
 +          this, font_description, creation_params, alternate_font_name);
 +    }
 +
-+    // 检测当前操作系统
 +    const char* current_os =
 +#if BUILDFLAG(IS_WIN)
 +      "windows";
@@ -170,9 +162,8 @@ index a674a14962..bb5bfbb5f3 100644
 +#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 +      "linux";
 +#else
-+      "linux";  // 默认
++      "linux";
 +#endif
-+
 +
 +    std::string spoofed_platform = command_line->GetSwitchValueASCII(switches::kFingerprintPlatform);
 +    if (spoofed_platform.empty()) {
@@ -186,25 +177,20 @@ index a674a14962..bb5bfbb5f3 100644
 +    uint32_t hash = std::hash<std::string>{}(fingerprint + requested_family);
 +
 +    if (spoofed_platform != current_os) {
-+      // 获取伪装平台的字体列表
 +      bool is_platform_font = std::find(platform_fonts.begin(), platform_fonts.end(),
 +                                        requested_family) != platform_fonts.end();
 +      if (is_platform_font) {
-+        // 伪装平台的字体，用当前系统的字体替代
 +        size_t index = hash % current_os_fonts.size();
 +        FontFaceCreationParams substitute_params(AtomicString(current_os_fonts[index].c_str()));
 +        return font_platform_data_cache_.GetOrCreateFontPlatformData(
 +            this, font_description, substitute_params, alternate_font_name);
 +      } else {
-+        // 非平台字体处理：95%概率隐藏
 +        float probability = static_cast<float>(hash) / static_cast<float>(std::numeric_limits<uint32_t>::max());
 +        if (probability < 0.95) {
 +          return nullptr;
 +        }
-+        // 5%概率显示，继续默认流程
 +      }
 +    } else {
-+      // 系统相同，随机隐藏2%的字体以生成指纹
 +      float probability = static_cast<float>(hash) / static_cast<float>(std::numeric_limits<uint32_t>::max());
 +      if (probability < 0.02) {
 +        return nullptr;
@@ -212,7 +198,7 @@ index a674a14962..bb5bfbb5f3 100644
 +    }
 +  }
 +
-+
    return font_platform_data_cache_.GetOrCreateFontPlatformData(
        this, font_description, creation_params, alternate_font_name);
  }
+
