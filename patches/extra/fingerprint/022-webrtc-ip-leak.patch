@@ -1,0 +1,30 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc	2026-08-01 14:47:36
+@@ -11,6 +11,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "base/functional/callback.h"
+ #include "base/functional/callback_helpers.h"
+@@ -28,6 +29,7 @@
+ #include "base/trace_event/trace_event.h"
+ #include "base/unguessable_token.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "components/webrtc/thread_wrapper.h"
+ #include "crypto/openssl_util.h"
+ #include "media/base/media_permission.h"
+@@ -1065,6 +1067,11 @@
+       Platform::Current()->GetWebRTCRendererPreferences(
+           web_frame, &webrtc_ip_handling_policy, &min_port, &max_port,
+           &allow_mdns_obfuscation);
++      if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++              switches::kFingerprint)) {
++        webrtc_ip_handling_policy =
++            mojom::blink::WebRtcIpHandlingPolicy::kDisableNonProxiedUdp;
++      }
+       DVLOG(1) << "Active WebRtcIPHandlingPolicy: "
+                << ToString(webrtc_ip_handling_policy);
+       // TODO(guoweis): |enable_multiple_routes| should be renamed to

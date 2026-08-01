@@ -1,0 +1,39 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-08-01 14:48:04
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/notreached.h"
+@@ -14,6 +15,7 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/uuid.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "media/base/media_permission.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+@@ -524,6 +526,20 @@
+       script_state, "Media.MediaDevices.EnumerateDevices",
+       kEnumerateDevicesTimeout);
+   const auto promise = result_tracker->Promise();
++
++  {
++    const base::CommandLine* command_line =
++        base::CommandLine::ForCurrentProcess();
++    if (command_line->HasSwitch(switches::kFingerprint) &&
++        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
++         command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++                 .find("media") == std::string::npos)) {
++      result_tracker->Resolve(MediaDeviceInfoVector());
++      SendLogMessage(
++          "enumerateDevices() => (spoofed: returning empty device list)");
++      return promise;
++    }
++  }
+ 
+   SendLogMessage(base::StringPrintf(
+       "enumerateDevices({result_tracker=%p}, "

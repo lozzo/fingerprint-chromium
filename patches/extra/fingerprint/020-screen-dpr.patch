@@ -1,0 +1,126 @@
+--- /tmp/chromium_orig/third_party/blink/renderer/core/frame/screen.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/screen.cc	2026-08-01 14:47:29
+@@ -28,7 +28,9 @@
+ 
+ #include "third_party/blink/renderer/core/frame/screen.h"
+ 
++#include "base/command_line.h"
+ #include "base/numerics/safe_conversions.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/event_target_names.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+@@ -40,6 +42,26 @@
+ 
+ namespace blink {
+ 
++namespace {
++
++gfx::Size GetFingerprintScreenSize() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  int width = 1920;
++  int height = 1080;
++  if (command_line->HasSwitch(switches::kFingerprintScreenWidth)) {
++    width = std::stoi(
++        command_line->GetSwitchValueASCII(switches::kFingerprintScreenWidth));
++  }
++  if (command_line->HasSwitch(switches::kFingerprintScreenHeight)) {
++    height = std::stoi(
++        command_line->GetSwitchValueASCII(switches::kFingerprintScreenHeight));
++  }
++  return gfx::Size(width, height);
++}
++
++}  // namespace
++
+ Screen::Screen(LocalDOMWindow* window, int64_t display_id)
+     : ExecutionContextClient(window), display_id_(display_id) {}
+ 
+@@ -81,12 +103,20 @@
+ int Screen::height() const {
+   if (!DomWindow())
+     return 0;
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint))
++    return GetFingerprintScreenSize().height();
+   return GetRect(/*available=*/false).height();
+ }
+ 
+ int Screen::width() const {
+   if (!DomWindow())
+     return 0;
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint))
++    return GetFingerprintScreenSize().width();
+   return GetRect(/*available=*/false).width();
+ }
+ 
+@@ -97,6 +127,11 @@
+   // https://drafts.csswg.org/cssom-view/#dom-screen-colordepth
+   unsigned unknown_color_depth = 24u;
+ 
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint))
++    return unknown_color_depth;
++
+   if (!DomWindow()) {
+     return unknown_color_depth;
+   }
+@@ -124,12 +159,20 @@
+ int Screen::availHeight() const {
+   if (!DomWindow())
+     return 0;
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint))
++    return GetFingerprintScreenSize().height();
+   return GetRect(/*available=*/true).height();
+ }
+ 
+ int Screen::availWidth() const {
+   if (!DomWindow())
+     return 0;
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprint))
++    return GetFingerprintScreenSize().width();
+   return GetRect(/*available=*/true).width();
+ }
+ 
+--- /tmp/chromium_orig/third_party/blink/renderer/core/frame/local_frame.cc	2026-05-27 04:39:02
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/local_frame.cc	2026-08-01 14:47:41
+@@ -37,6 +37,7 @@
+ #include <vector>
+ 
+ #include "base/check_deref.h"
++#include "base/command_line.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/debug/dump_without_crashing.h"
+ #include "base/metrics/histogram_functions.h"
+@@ -48,6 +49,7 @@
+ #include "base/unguessable_token.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "components/ungoogled/ungoogled_switches.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include "mojo/public/cpp/system/message_pipe.h"
+ #include "services/network/public/cpp/features.h"
+@@ -1861,6 +1863,14 @@
+ double LocalFrame::DevicePixelRatio() const {
+   if (!page_)
+     return 0;
++
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switches::kFingerprintDeviceScaleFactor)) {
++    return std::stod(
++        command_line->GetSwitchValueASCII(
++            switches::kFingerprintDeviceScaleFactor));
++  }
+ 
+   double ratio = page_->InspectorDeviceScaleFactorOverride();
+   ratio *= LayoutZoomFactor();

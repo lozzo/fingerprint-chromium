@@ -129,3 +129,8 @@ extra/fingerprint/015-canvas-measure-text.patch
 extra/fingerprint/016-webgl-readPixels.patch
 extra/fingerprint/018-timezone.patch
 extra/fingerprint/019-build-deps.patch
+extra/fingerprint/020-screen-dpr.patch
+extra/fingerprint/021-css-outer-window.patch
+extra/fingerprint/022-webrtc-ip-leak.patch
+extra/fingerprint/023-mediadevices-enum.patch
+extra/fingerprint/024-navigator-language.patch
