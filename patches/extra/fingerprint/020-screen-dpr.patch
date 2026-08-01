@@ -1,5 +1,5 @@
 --- /tmp/chromium_orig/third_party/blink/renderer/core/frame/screen.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/screen.cc	2026-08-01 14:47:29
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/screen.cc	2026-08-01 15:18:06
 @@ -28,7 +28,9 @@
  
  #include "third_party/blink/renderer/core/frame/screen.h"
@@ -21,13 +21,13 @@
 +      base::CommandLine::ForCurrentProcess();
 +  int width = 1920;
 +  int height = 1080;
-+  if (command_line->HasSwitch(switches::kFingerprintScreenWidth)) {
++  if (command_line->HasSwitch(::switches::kFingerprintScreenWidth)) {
 +    width = std::stoi(
-+        command_line->GetSwitchValueASCII(switches::kFingerprintScreenWidth));
++        command_line->GetSwitchValueASCII(::switches::kFingerprintScreenWidth));
 +  }
-+  if (command_line->HasSwitch(switches::kFingerprintScreenHeight)) {
++  if (command_line->HasSwitch(::switches::kFingerprintScreenHeight)) {
 +    height = std::stoi(
-+        command_line->GetSwitchValueASCII(switches::kFingerprintScreenHeight));
++        command_line->GetSwitchValueASCII(::switches::kFingerprintScreenHeight));
 +  }
 +  return gfx::Size(width, height);
 +}
@@ -43,7 +43,7 @@
      return 0;
 +  const base::CommandLine* command_line =
 +      base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprint))
++  if (command_line->HasSwitch(::switches::kFingerprint))
 +    return GetFingerprintScreenSize().height();
    return GetRect(/*available=*/false).height();
  }
@@ -53,7 +53,7 @@
      return 0;
 +  const base::CommandLine* command_line =
 +      base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprint))
++  if (command_line->HasSwitch(::switches::kFingerprint))
 +    return GetFingerprintScreenSize().width();
    return GetRect(/*available=*/false).width();
  }
@@ -64,7 +64,7 @@
  
 +  const base::CommandLine* command_line =
 +      base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprint))
++  if (command_line->HasSwitch(::switches::kFingerprint))
 +    return unknown_color_depth;
 +
    if (!DomWindow()) {
@@ -76,7 +76,7 @@
      return 0;
 +  const base::CommandLine* command_line =
 +      base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprint))
++  if (command_line->HasSwitch(::switches::kFingerprint))
 +    return GetFingerprintScreenSize().height();
    return GetRect(/*available=*/true).height();
  }
@@ -86,13 +86,13 @@
      return 0;
 +  const base::CommandLine* command_line =
 +      base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprint))
++  if (command_line->HasSwitch(::switches::kFingerprint))
 +    return GetFingerprintScreenSize().width();
    return GetRect(/*available=*/true).width();
  }
  
 --- /tmp/chromium_orig/third_party/blink/renderer/core/frame/local_frame.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/local_frame.cc	2026-08-01 14:47:41
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/local_frame.cc	2026-08-01 15:18:06
 @@ -37,6 +37,7 @@
  #include <vector>
  
@@ -116,10 +116,10 @@
 +
 +  const base::CommandLine* command_line =
 +      base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprintDeviceScaleFactor)) {
++  if (command_line->HasSwitch(::switches::kFingerprintDeviceScaleFactor)) {
 +    return std::stod(
 +        command_line->GetSwitchValueASCII(
-+            switches::kFingerprintDeviceScaleFactor));
++            ::switches::kFingerprintDeviceScaleFactor));
 +  }
  
    double ratio = page_->InspectorDeviceScaleFactorOverride();

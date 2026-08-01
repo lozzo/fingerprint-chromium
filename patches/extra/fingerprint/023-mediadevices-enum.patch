@@ -1,5 +1,5 @@
 --- /tmp/chromium_orig/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-08-01 14:48:04
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-08-01 15:18:06
 @@ -7,6 +7,7 @@
  #include <algorithm>
  #include <utility>
@@ -24,9 +24,9 @@
 +  {
 +    const base::CommandLine* command_line =
 +        base::CommandLine::ForCurrentProcess();
-+    if (command_line->HasSwitch(switches::kFingerprint) &&
-+        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
-+         command_line->GetSwitchValueASCII(switches::kDisableSpoofing)
++    if (command_line->HasSwitch(::switches::kFingerprint) &&
++        (!command_line->HasSwitch(::switches::kDisableSpoofing) ||
++         command_line->GetSwitchValueASCII(::switches::kDisableSpoofing)
 +                 .find("media") == std::string::npos)) {
 +      result_tracker->Resolve(MediaDeviceInfoVector());
 +      SendLogMessage(

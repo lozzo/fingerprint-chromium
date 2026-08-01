@@ -1,5 +1,5 @@
 --- /tmp/chromium_orig/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc	2026-08-01 14:47:36
++++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc	2026-08-01 15:18:06
 @@ -11,6 +11,7 @@
  #include <utility>
  #include <vector>
@@ -21,7 +21,7 @@
            web_frame, &webrtc_ip_handling_policy, &min_port, &max_port,
            &allow_mdns_obfuscation);
 +      if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-+              switches::kFingerprint)) {
++              ::switches::kFingerprint)) {
 +        webrtc_ip_handling_policy =
 +            mojom::blink::WebRtcIpHandlingPolicy::kDisableNonProxiedUdp;
 +      }
