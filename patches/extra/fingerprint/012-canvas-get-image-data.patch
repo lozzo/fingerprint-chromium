@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
-index 381f92b..161b03b 100644
+index 381f92b..a211bd9 100644
 --- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 +++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 @@ -13,6 +13,7 @@
@@ -18,7 +18,15 @@ index 381f92b..161b03b 100644
  #include "components/viz/common/resources/shared_image_format_utils.h"
  #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
  #include "third_party/blink/public/common/metrics/document_update_reason.h"
-@@ -532,6 +534,13 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
+@@ -46,6 +48,7 @@
+ #include "third_party/blink/renderer/core/dom/events/event.h"
+ #include "third_party/blink/renderer/core/dom/node.h"
+ #include "third_party/blink/renderer/core/event_type_names.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/web_feature.h"
+ #include "third_party/blink/renderer/core/geometry/dom_matrix.h"
+ #include "third_party/blink/renderer/core/html/canvas/canvas_font_cache.h"
+@@ -532,6 +535,13 @@ ImageData* BaseRenderingContext2D::getImageDataInternal(
            snapshot->PaintImageForCurrentFrame().GetSkImageInfo().bounds();
        DCHECK(!bounds.intersect(SkIRect::MakeXYWH(sx, sy, sw, sh)));
      }
@@ -32,7 +40,7 @@ index 381f92b..161b03b 100644
    }
  
    return image_data;
-@@ -1174,9 +1183,31 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
+@@ -1174,9 +1184,31 @@ TextMetrics* BaseRenderingContext2D::measureText(const String& text) {
    TextDirection direction =
        ToTextDirection(state.GetDirection(), host, computed_style);
  
