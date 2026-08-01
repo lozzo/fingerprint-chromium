@@ -1,8 +1,9 @@
-diff --git a/third_party/blink/renderer/modules/webgl/gpu_info.h b/third_party/blink/renderer/modules/webgl/gpu_info.h
+diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_info.h b/third_party/blink/renderer/modules/webgl/gpu_info.h
 new file mode 100644
-index 0000000000..0000000000
+index 0000000..b1e2a11
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/webgl/gpu_info.h
+@@ -0,0 +1,29 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_INFO_H_
 +#define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_INFO_H_
 +
@@ -32,15 +33,15 @@ index 0000000000..0000000000
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_INFO_H_
-+
-
-diff --git a/third_party/blink/renderer/modules/webgl/gpu_info.cc b/third_party/blink/renderer/modules/webgl/gpu_info.cc
+diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_info.cc b/third_party/blink/renderer/modules/webgl/gpu_info.cc
 new file mode 100644
-index 0000000000..0000000000
+index 0000000..e4b572f
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/webgl/gpu_info.cc
+@@ -0,0 +1,88 @@
 +#include "third_party/blink/renderer/modules/webgl/gpu_info.h"
 +
++#include "base/containers/span.h"
 +#include "base/strings/stringprintf.h"
 +#include "components/ungoogled/fingerprint_data.h"
 +
@@ -61,7 +62,7 @@ index 0000000000..0000000000
 +    index = kGpuModelCount - 1;
 +  }
 +
-+  const GpuModelInfo& model = kGpuModels[index];
++  const GpuModelInfo& model = base::span(kGpuModels)[index];
 +  GpuInfo info;
 +  info.model_name = model.model_name;
 +  info.device_id = model.device_id;
@@ -115,7 +116,7 @@ index 0000000000..0000000000
 +  }
 +
 +  return base::StringPrintf("ANGLE (Apple, ANGLE Metal Renderer: Apple %s, Unspecified Version)",
-+                         kMacosGpuModels[index]);
++                         base::span(kMacosGpuModels)[index]);
 +}
 +
 +std::string GetLinuxGpuString(const std::string& model_name) {
@@ -126,13 +127,12 @@ index 0000000000..0000000000
 +}
 +
 +}  // namespace blink
-+
-
-diff --git a/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h
+diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h
 new file mode 100644
-index 0000000000..0000000000
+index 0000000..624bafd
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h
+@@ -0,0 +1,14 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_FINGERPRINT_H_
 +#define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_FINGERPRINT_H_
 +
@@ -147,13 +147,12 @@ index 0000000000..0000000000
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_FINGERPRINT_H_
-+
-
-diff --git a/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc
+diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc
 new file mode 100644
-index 0000000000..0000000000
+index 0000000..c17304f
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc
+@@ -0,0 +1,87 @@
 +#include "third_party/blink/renderer/modules/webgl/gpu_fingerprint.h"
 +
 +#include "base/command_line.h"
@@ -241,12 +240,10 @@ index 0000000000..0000000000
 +}
 +
 +}  // namespace blink
-+
-
 diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index e3f4049..b742155 100644
 --- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
 +++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
-
 @@ -29,6 +29,7 @@
  #include <utility>
  
@@ -279,7 +276,7 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
  #include "third_party/blink/renderer/platform/graphics/static_bitmap_image_transform.h"
  #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
  #include "third_party/blink/renderer/platform/graphics/video_frame_image_util.h"
-@@ -3997,6 +4001,10 @@
+@@ -3997,6 +4001,10 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
        return ScriptValue::CreateNull(script_state->GetIsolate());
      case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
        if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
@@ -290,7 +287,7 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
          return WebGLAny(script_state,
                          String(ContextGL()->GetString(GL_RENDERER)));
        }
-@@ -4006,6 +4014,10 @@
+@@ -4006,6 +4014,10 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
        return ScriptValue::CreateNull(script_state->GetIsolate());
      case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
        if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
@@ -301,13 +298,37 @@ diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_ba
          return WebGLAny(script_state,
                          String(ContextGL()->GetString(GL_VENDOR)));
        }
-
-
+@@ -5152,6 +5164,25 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+       return;
+     }
+     ContextGL()->ReadPixels(x, y, width, height, format, type, data);
++
++    const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++    if (command_line->HasSwitch(switches::kFingerprint) &&
++        (!command_line->HasSwitch(switches::kDisableSpoofing) ||
++         command_line->GetSwitchValueASCII(switches::kDisableSpoofing).find("canvas") == std::string::npos)) {
++      SkColorType color_type;
++      SkAlphaType alpha_type = kUnpremul_SkAlphaType;
++      if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
++        color_type = kRGBA_8888_SkColorType;
++      } else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
++        color_type = kRGB_888x_SkColorType;
++      } else if (format == GL_ALPHA && type == GL_UNSIGNED_BYTE) {
++        color_type = kAlpha_8_SkColorType;
++      } else {
++        color_type = kRGBA_8888_SkColorType;
++      }
++      SkImageInfo image_info = SkImageInfo::Make(width, height, color_type, alpha_type);
++      StaticBitmapImage::ShuffleSubchannelColorData(data, image_info, 0, 0);
++    }
+   }
+ }
+ 
 diff --git a/third_party/blink/renderer/modules/webgl/BUILD.gn b/third_party/blink/renderer/modules/webgl/BUILD.gn
+index d611207..6dfe877 100644
 --- a/third_party/blink/renderer/modules/webgl/BUILD.gn
 +++ b/third_party/blink/renderer/modules/webgl/BUILD.gn
-
-@@ -48,6 +48,10 @@
+@@ -48,6 +48,10 @@ blink_modules_sources("webgl") {
      "ext_texture_norm_16.cc",
      "ext_texture_norm_16.h",
      "gl_string_query.h",
@@ -318,4 +339,3 @@ diff --git a/third_party/blink/renderer/modules/webgl/BUILD.gn b/third_party/bli
      "khr_parallel_shader_compile.cc",
      "khr_parallel_shader_compile.h",
      "nv_shader_noperspective_interpolation.cc",
-
