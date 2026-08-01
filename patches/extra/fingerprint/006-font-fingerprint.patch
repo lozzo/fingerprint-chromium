@@ -1,12 +1,15 @@
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index 75cc0b7..43a3d4b 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
-
-@@ -32,15 +32,18 @@
+@@ -31,16 +31,21 @@
+ 
  #include <limits>
  #include <memory>
++#include <string_view>
  
 +#include "base/command_line.h"
++#include "base/containers/fixed_flat_set.h"
  #include "base/debug/alias.h"
  #include "base/feature_list.h"
  #include "base/notreached.h"
@@ -21,11 +24,10 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
  #include "skia/ext/font_utils.h"
  #include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/platform/platform.h"
-@@ -122,7 +125,114 @@
-                              AlternateFontName::kNoAlternate);
+@@ -123,6 +128,114 @@ const FontPlatformData* FontCache::SystemFontPlatformData(
  }
  #endif
-+
+ 
 +static std::vector<std::string> GetPlatformFonts(const std::string& platform) {
 +  if (platform == "windows") {
 +    return {
@@ -99,7 +101,8 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
 +}
 +
 +static bool IsBasicFont(const std::string& font_family) {
-+  static const std::set<std::string> basic_fonts = {
++  static constexpr auto basic_fonts =
++      base::MakeFixedFlatSet<std::string_view>({
 +    "-webkit-standard",
 +    "system-ui",
 +
@@ -119,7 +122,7 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
 +    "Segoe UI",
 +    "Times New Roman",
 +    "Times",
- 
++
 +    "cursive",
 +    "fantasy",
 +    "monospace",
@@ -127,16 +130,16 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
 +    "serif",
 +    "math",
 +
-+    "BlinkMacSystemFont"
-+  };
++        "BlinkMacSystemFont",
++      });
 +
-+  return basic_fonts.count(font_family) > 0;
++  return basic_fonts.contains(std::string_view(font_family));
 +}
 +
  const FontPlatformData* FontCache::GetFontPlatformData(
      const FontDescription& font_description,
      const FontFaceCreationParams& creation_params,
-@@ -141,6 +251,64 @@
+@@ -141,6 +254,64 @@ const FontPlatformData* FontCache::GetFontPlatformData(
    }
  #endif
  
@@ -201,4 +204,3 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
    return font_platform_data_cache_.GetOrCreateFontPlatformData(
        this, font_description, creation_params, alternate_font_name);
  }
-
