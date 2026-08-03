@@ -29,20 +29,3 @@ diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware
 +
    return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
  }
- 
-
-
-diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
---- a/third_party/blink/renderer/core/frame/navigator_device_memory.cc
-+++ b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
-
-@@ -12,7 +12,7 @@
- namespace blink {
- 
- float NavigatorDeviceMemory::deviceMemory() const {
--  return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
-+  return 8;
- }
- 
- }  // namespace blink
-

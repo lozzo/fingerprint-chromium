@@ -1,5 +1,6 @@
---- /tmp/chromium_orig/third_party/blink/renderer/core/events/navigator_events.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/events/navigator_events.cc	2026-08-01 16:24:41
+diff --git a/third_party/blink/renderer/core/events/navigator_events.cc b/third_party/blink/renderer/core/events/navigator_events.cc
+--- a/third_party/blink/renderer/core/events/navigator_events.cc
++++ b/third_party/blink/renderer/core/events/navigator_events.cc
 @@ -30,6 +30,8 @@
  
  #include "third_party/blink/renderer/core/events/navigator_events.h"

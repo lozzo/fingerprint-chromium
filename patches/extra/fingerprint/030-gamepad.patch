@@ -1,5 +1,6 @@
---- /tmp/chromium_orig/third_party/blink/renderer/modules/gamepad/navigator_gamepad.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/gamepad/navigator_gamepad.cc	2026-08-01 16:27:31
+diff --git a/third_party/blink/renderer/modules/gamepad/navigator_gamepad.cc b/third_party/blink/renderer/modules/gamepad/navigator_gamepad.cc
+--- a/third_party/blink/renderer/modules/gamepad/navigator_gamepad.cc
++++ b/third_party/blink/renderer/modules/gamepad/navigator_gamepad.cc
 @@ -26,6 +26,8 @@
  #include "third_party/blink/renderer/modules/gamepad/navigator_gamepad.h"
  

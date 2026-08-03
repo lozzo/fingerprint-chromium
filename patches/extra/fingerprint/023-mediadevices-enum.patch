@@ -1,5 +1,6 @@
---- /tmp/chromium_orig/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/mediastream/media_devices.cc	2026-08-01 15:18:06
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
 @@ -7,6 +7,7 @@
  #include <algorithm>
  #include <utility>

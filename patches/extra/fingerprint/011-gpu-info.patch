@@ -1,4 +1,4 @@
-diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_info.h b/third_party/blink/renderer/modules/webgl/gpu_info.h
+diff --git a/third_party/blink/renderer/modules/webgl/gpu_info.h b/third_party/blink/renderer/modules/webgl/gpu_info.h
 new file mode 100644
 index 0000000..b1e2a11
 --- /dev/null
@@ -33,7 +33,7 @@ index 0000000..b1e2a11
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_INFO_H_
-diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_info.cc b/third_party/blink/renderer/modules/webgl/gpu_info.cc
+diff --git a/third_party/blink/renderer/modules/webgl/gpu_info.cc b/third_party/blink/renderer/modules/webgl/gpu_info.cc
 new file mode 100644
 index 0000000..e4b572f
 --- /dev/null
@@ -127,7 +127,7 @@ index 0000000..e4b572f
 +}
 +
 +}  // namespace blink
-diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h
+diff --git a/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.h
 new file mode 100644
 index 0000000..624bafd
 --- /dev/null
@@ -147,7 +147,7 @@ index 0000000..624bafd
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGL_GPU_FINGERPRINT_H_
-diff --git a/Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc
+diff --git a/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc b/third_party/blink/renderer/modules/webgl/gpu_fingerprint.cc
 new file mode 100644
 index 0000000..c17304f
 --- /dev/null

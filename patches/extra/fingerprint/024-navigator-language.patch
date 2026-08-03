@@ -1,5 +1,6 @@
---- /tmp/chromium_orig/third_party/blink/renderer/core/frame/navigator_language.cc	2026-05-27 04:39:02
-+++ /Volumes/Lexar-1T/mk_ch/chromium/src/third_party/blink/renderer/core/frame/navigator_language.cc	2026-08-01 14:59:57
+diff --git a/third_party/blink/renderer/core/frame/navigator_language.cc b/third_party/blink/renderer/core/frame/navigator_language.cc
+--- a/third_party/blink/renderer/core/frame/navigator_language.cc
++++ b/third_party/blink/renderer/core/frame/navigator_language.cc
 @@ -5,6 +5,8 @@
  #include "third_party/blink/renderer/core/frame/navigator_language.h"
  
