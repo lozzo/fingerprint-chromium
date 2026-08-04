@@ -1,0 +1,143 @@
+From: AI Browser Control <ai-control@localhost>
+Subject: [PATCH] Give the AI control overlay an iridescent activity surface
+
+Replace the neutral loading card with a browser-native automation status
+surface. The overlay keeps all presentation inside its isolated WebView while
+adding a moving spectrum edge, scan bands, explicit progress, and reduced
+motion handling.
+
+---
+ chrome/browser/ai_control/ai_control_overlay_web_view.cc | 112 +++++++++++++---
+ 1 file changed, 81 insertions(+), 31 deletions(-)
+
+diff --git a/chrome/browser/ai_control/ai_control_overlay_web_view.cc b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+--- a/chrome/browser/ai_control/ai_control_overlay_web_view.cc
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+@@ -101,9 +101,12 @@ void AiControlOverlayWebView::Refresh() {
+       web_contents()->WasShown();
+     }
+   }
+-  if (web_contents() && web_contents()->GetRenderWidgetHostView()) {
+-    web_contents()->GetRenderWidgetHostView()->SetBackgroundColor(
+-        SK_ColorTRANSPARENT);
++  if (web_contents()) {
++    web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
++    if (web_contents()->GetRenderWidgetHostView()) {
++      web_contents()->GetRenderWidgetHostView()->SetBackgroundColor(
++          SK_ColorTRANSPARENT);
++    }
+   }
+ }
+ 
+@@ -147,33 +147,80 @@ std::string AiControlOverlayWebView::BuildHtml() const {
+   const std::string action = presentation->handoff_pending
+                                  ? "<span class='waiting'>已请求接管</span>"
+                                  : "<a href='about:blank#handoff'>请求接管</a>";
+   return base::StrCat({
+-      "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>",
+-      "<meta name='color-scheme' content='light dark'><style>",
+-      "*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}",
+-      "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;",
+-      "letter-spacing:0;background:rgba(18,20,24,.46);color:#202124;display:grid;",
+-      "place-items:center;backdrop-filter:blur(3px)}main{width:min(420px,calc(100% - 32px));",
+-      "background:#fff;border:1px solid rgba(32,33,36,.18);border-radius:8px;",
+-      "box-shadow:0 12px 36px rgba(0,0,0,.22);padding:22px 24px}",
+-      ".top{display:flex;align-items:center;gap:14px}.spinner{width:28px;height:28px;",
+-      "border:3px solid #d7dbe0;border-top-color:#0b57d0;border-radius:50%;",
+-      "animation:spin 1s linear infinite;flex:none}h1{font-size:17px;line-height:1.35;",
+-      "margin:0;font-weight:600}p{font-size:13px;line-height:1.55;color:#5f6368;",
+-      "margin:12px 0 16px}.track{height:4px;background:#e7e9ec;border-radius:2px;",
+-      "overflow:hidden}.bar{height:100%;width:", progress,
+-      "%;background:#0b57d0;transition:width .2s ease}.actions{display:flex;",
+-      "justify-content:flex-end;margin-top:18px}a{color:#0b57d0;text-decoration:none;",
+-      "font-size:13px;font-weight:600;padding:8px 10px;border-radius:4px}",
+-      "a:hover{background:#eef3fd}.waiting{font-size:13px;color:#5f6368;padding:8px 10px}",
+-      "@keyframes spin{to{transform:rotate(360deg)}}",
+-      "@media(prefers-reduced-motion:reduce){.spinner{animation:none}.bar{transition:none}}",
+-      "@media(prefers-color-scheme:dark){body{color:#e8eaed;background:rgba(0,0,0,.58)}",
+-      "main{background:#202124;border-color:#4a4d51}p,.waiting{color:#bdc1c6}",
+-      ".track{background:#3c4043}a{color:#8ab4f8}a:hover{background:#303845}}",
+-      "</style></head><body><main><div class='top'><div class='spinner'></div><h1>",
+-      Escape(presentation->title), "</h1></div><p>",
+-      Escape(presentation->message), "</p><div class='track'><div class='bar'></div>",
+-      "</div><div class='actions'>", action,
+-      "</div></main></body></html>"});
++      R"HTML(<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
++<meta name="color-scheme" content="dark"><style>
++*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}
++body{position:relative;overflow:hidden;display:grid;place-items:center;padding:24px;
++font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:0;
++color:#f7faf9;background:transparent}
++body:before{content:"";position:absolute;inset:-70%;pointer-events:none;opacity:.28;
++background:repeating-linear-gradient(112deg,transparent 0 10%,rgba(37,214,194,.45) 12%,
++transparent 14% 25%,rgba(238,82,142,.36) 28%,transparent 31% 43%,
++rgba(205,238,76,.30) 46%,transparent 49% 60%);animation:spectrum-sweep 9s linear infinite}
++body:after{content:"";position:absolute;inset:0;pointer-events:none;
++background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),
++linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px),
++linear-gradient(rgba(7,10,12,.48),rgba(7,10,12,.48));
++background-size:48px 48px,48px 48px,auto}
++main{position:relative;z-index:1;width:min(500px,calc(100vw - 32px));padding:1px;
++border-radius:8px;background:linear-gradient(105deg,#25d6c2,#cdee4c,#ff805d,#ee528e,
++#8c7cff,#25d6c2);background-size:320% 100%;box-shadow:0 26px 80px rgba(0,0,0,.46),
++0 0 54px rgba(37,214,194,.16);animation:edge-flow 5s linear infinite}
++.panel{position:relative;overflow:hidden;border-radius:7px;padding:26px 28px 22px;
++background:rgba(15,18,20,.94);border:1px solid rgba(255,255,255,.08)}
++.panel:after{content:"";position:absolute;left:-30%;right:-30%;top:-1px;height:90px;
++pointer-events:none;background:linear-gradient(100deg,transparent 25%,rgba(255,255,255,.16),
++transparent 75%);transform:translateX(-60%);animation:panel-glint 4.8s ease-in-out infinite}
++.eyebrow{display:flex;align-items:center;gap:8px;margin-bottom:20px;color:#a9b2af;
++font:600 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase}
++.live{width:7px;height:7px;border-radius:50%;background:#cdee4c;
++box-shadow:0 0 0 4px rgba(205,238,76,.1),0 0 18px rgba(205,238,76,.7)}
++.top{display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center;gap:16px}
++.spinner{position:relative;width:44px;height:44px;border-radius:50%;
++background:conic-gradient(from 30deg,#25d6c2,#cdee4c,#ff805d,#ee528e,#8c7cff,#25d6c2);
++animation:spin 1.8s linear infinite}
++.spinner:before{content:"";position:absolute;inset:4px;border-radius:50%;background:#111517}
++.spinner:after{content:"";position:absolute;inset:16px;border-radius:50%;background:#f7faf9;
++box-shadow:0 0 16px rgba(37,214,194,.65)}
++h1{margin:0;font-size:20px;line-height:1.28;font-weight:650;color:#f7faf9}
++p{margin:16px 0 22px;color:#aeb8b5;font-size:13px;line-height:1.65}
++.progress-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;
++color:#8f9a97;font:600 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}
++.progress-head strong{color:#f7faf9;font-size:11px}.track{height:6px;overflow:hidden;
++border-radius:3px;background:#282e2f;box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
++.bar{position:relative;height:100%;width:)HTML",
++      progress,
++      R"HTML(%;min-width:6px;border-radius:3px;background:linear-gradient(90deg,#25d6c2,
++#cdee4c,#ff805d,#ee528e,#8c7cff,#25d6c2);background-size:260% 100%;
++box-shadow:0 0 18px rgba(37,214,194,.42);transition:width .25s ease;
++animation:energy-flow 2.8s linear infinite}.footer{display:flex;align-items:center;
++justify-content:space-between;gap:16px;margin-top:20px}.signal{display:flex;gap:5px}
++.signal i{display:block;width:18px;height:2px;background:#3b4443}.signal i:nth-child(1){background:#25d6c2}
++.signal i:nth-child(2){background:#cdee4c}.signal i:nth-child(3){background:#ff805d}
++.actions{display:flex;justify-content:flex-end}a,.waiting{font-size:12px;font-weight:650;
++padding:8px 10px;border-radius:4px}a{color:#f7faf9;text-decoration:none;
++border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04)}
++a:hover{border-color:#25d6c2;background:rgba(37,214,194,.1)}.waiting{color:#9da7a4}
++@keyframes spin{to{transform:rotate(1turn)}}
++@keyframes spectrum-sweep{to{transform:translate3d(18%,8%,0)}}
++@keyframes edge-flow{to{background-position:320% 0}}
++@keyframes energy-flow{to{background-position:260% 0}}
++@keyframes panel-glint{0%,28%{transform:translateX(-60%)}72%,100%{transform:translateX(60%)}}
++@media(max-width:520px){body{padding:16px}.panel{padding:22px 20px 18px}h1{font-size:18px}}
++@media(prefers-reduced-motion:reduce){body:before,.spinner,main,.bar,.panel:after{animation:none}
++.bar{transition:none}}
++</style></head><body><main role="status" aria-live="polite"><section class="panel">
++<div class="eyebrow"><span class="live"></span>AI AUTOMATION / LOCAL CONTROL</div>
++<div class="top"><div class="spinner"></div><h1>)HTML",
++      Escape(presentation->title),
++      R"HTML(</h1></div><p>)HTML",
++      Escape(presentation->message),
++      R"HTML(</p><div class="progress-head"><span>执行进度</span><strong>)HTML",
++      progress,
++      R"HTML(%</strong></div><div class="track"><div class="bar"></div></div>
++<div class="footer"><div class="signal" aria-hidden="true"><i></i><i></i><i></i></div>
++<div class="actions">)HTML",
++      action,
++      R"HTML(</div></div></section></main></body></html>)HTML"});
+ }
+
+-- 
+2.39.5

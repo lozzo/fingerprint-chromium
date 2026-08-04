@@ -1,0 +1,557 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 97b17f8..7db5444 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -217,6 +217,8 @@ static_library("browser") {
+     "accessibility/prefers_default_scrollbar_styles_prefs.h",
+     "after_startup_task_utils.cc",
+     "after_startup_task_utils.h",
++    "ai_control/ai_control_service.cc",
++    "ai_control/ai_control_service.h",
+     "bad_message.cc",
+     "bad_message.h",
+     "browser_about_handler.cc",
+diff --git a/patch-staging/001-new/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai_control/ai_control_service.cc
+new file mode 100644
+index 0000000..f71316d
+--- /dev/null
++++ b/chrome/browser/ai_control/ai_control_service.cc
+@@ -0,0 +1,406 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ai_control/ai_control_service.h"
++
++#include <memory>
++#include <string_view>
++#include <utility>
++
++#include "base/check.h"
++#include "base/command_line.h"
++#include "base/containers/span.h"
++#include "base/files/file_util.h"
++#include "base/files/important_file_writer.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/logging.h"
++#include "base/process/process_handle.h"
++#include "base/rand_util.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/task/thread_pool.h"
++#include "base/uuid.h"
++#include "build/build_config.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/web_contents.h"
++#include "crypto/secure_util.h"
++#include "net/base/ip_address.h"
++#include "net/base/ip_endpoint.h"
++#include "net/base/net_errors.h"
++#include "net/http/http_status_code.h"
++#include "net/log/net_log_source.h"
++#include "net/server/http_server.h"
++#include "net/server/http_server_request_info.h"
++#include "net/socket/tcp_server_socket.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++
++namespace ai_control {
++namespace {
++
++constexpr char kPortSwitch[] = "ai-control-port";
++constexpr char kInfoFileSwitch[] = "ai-control-info-file";
++constexpr char kWebSocketPath[] = "/ai-control/v1";
++constexpr size_t kMaxMessageSize = 64 * 1024;
++constexpr int kBacklog = 8;
++
++AiControlService* g_ai_control_service = nullptr;
++
++constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
++    net::DefineNetworkTrafficAnnotation("ai_browser_control", R"(
++      semantics {
++        sender: "AI Browser Control"
++        description:
++          "A command line enabled loopback WebSocket used by a local AI "
++          "controller to coordinate browser tab UI and ownership."
++        trigger: "The browser is launched with --ai-control-port."
++        data: "Tab metadata and local browser control commands."
++        destination: LOCAL
++      }
++      policy {
++        cookies_allowed: NO
++        setting:
++          "Disabled unless explicitly enabled by a command line switch."
++        policy_exception_justification: "Not implemented."
++      })");
++
++base::DictValue MakeError(std::string_view code, std::string_view message) {
++  base::DictValue error;
++  error.Set("code", code);
++  error.Set("message", message);
++  return error;
++}
++
++void WriteInfoFile(const base::FilePath& path,
++                   int port,
++                   std::string token,
++                   std::string browser_instance_id) {
++  if (base::IsLink(path)) {
++    LOG(ERROR) << "AI control info file cannot be a symbolic link";
++    return;
++  }
++
++  base::DictValue info;
++  info.Set("protocolVersion", 1);
++  info.Set("port", port);
++  info.Set("pid", static_cast<int>(base::GetCurrentProcId()));
++  info.Set("browserInstanceId", std::move(browser_instance_id));
++  info.Set("token", std::move(token));
++  std::string json;
++  if (!base::JSONWriter::Write(info, &json) ||
++      !base::ImportantFileWriter::WriteFileAtomically(path, json)) {
++    LOG(ERROR) << "Failed to write AI control info file";
++    return;
++  }
++#if BUILDFLAG(IS_POSIX)
++  if (!base::SetPosixFilePermissions(
++          path, base::FILE_PERMISSION_READ_BY_USER |
++                    base::FILE_PERMISSION_WRITE_BY_USER)) {
++    LOG(ERROR) << "Failed to restrict AI control info file permissions";
++  }
++#endif
++}
++
++}  // namespace
++
++class AiControlService::IOThreadData : public net::HttpServer::Delegate {
++ public:
++  IOThreadData(base::WeakPtr<AiControlService> owner,
++               std::string token,
++               scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner)
++      : owner_(std::move(owner)),
++        token_(std::move(token)),
++        ui_task_runner_(std::move(ui_task_runner)) {
++    DETACH_FROM_SEQUENCE(io_sequence_checker_);
++  }
++
++  IOThreadData(const IOThreadData&) = delete;
++  IOThreadData& operator=(const IOThreadData&) = delete;
++  ~IOThreadData() override = default;
++
++  void Start(int port) {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(io_sequence_checker_);
++    auto socket =
++        std::make_unique<net::TCPServerSocket>(nullptr, net::NetLogSource());
++    int result = socket->Listen(
++        net::IPEndPoint(net::IPAddress::IPv4Localhost(), port), kBacklog,
++        /*ipv6_only=*/std::nullopt);
++    if (result != net::OK) {
++      ui_task_runner_->PostTask(
++          FROM_HERE,
++          base::BindOnce(&AiControlService::OnServerCreated, owner_, -1));
++      return;
++    }
++
++    server_ = std::make_unique<net::HttpServer>(std::move(socket), this);
++    net::IPEndPoint local_address;
++    result = server_->GetLocalAddress(&local_address);
++    port_ = result == net::OK ? local_address.port() : -1;
++    ui_task_runner_->PostTask(
++        FROM_HERE,
++        base::BindOnce(&AiControlService::OnServerCreated, owner_, port_));
++  }
++
++  void Send(int connection_id, std::string message) {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(io_sequence_checker_);
++    if (server_ && active_connection_id_ == connection_id) {
++      server_->SendOverWebSocket(connection_id, message, kTrafficAnnotation);
++    }
++  }
++
++ private:
++  void OnConnect(int connection_id) override {}
++
++  void OnHttpRequest(int connection_id,
++                     const net::HttpServerRequestInfo& info) override {
++    server_->Send404(connection_id, kTrafficAnnotation);
++  }
++
++  void OnWebSocketRequest(
++      int connection_id,
++      const net::HttpServerRequestInfo& info) override {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(io_sequence_checker_);
++    const std::string expected_authorization = "Bearer " + token_;
++    const std::string authorization = info.GetHeaderValue("authorization");
++    const std::string expected_host =
++        base::StringPrintf("127.0.0.1:%d", port_);
++    const bool authenticated =
++        authorization.size() == expected_authorization.size() &&
++        crypto::SecureMemEqual(base::as_byte_span(authorization),
++                               base::as_byte_span(expected_authorization));
++    const bool valid =
++        info.method == "GET" && info.path == kWebSocketPath &&
++        info.GetHeaderValue("host") == expected_host &&
++        !info.headers.contains("origin") &&
++        !info.headers.contains("sec-websocket-extensions") &&
++        !info.headers.contains("sec-websocket-protocol") && authenticated;
++    if (!valid) {
++      server_->Send(connection_id, net::HTTP_FORBIDDEN, "Forbidden",
++                    "text/plain", kTrafficAnnotation);
++      return;
++    }
++
++    if (active_connection_id_.has_value() &&
++        *active_connection_id_ != connection_id) {
++      server_->Close(*active_connection_id_);
++    }
++    active_connection_id_ = connection_id;
++    server_->AcceptWebSocket(connection_id, info, kTrafficAnnotation);
++    ui_task_runner_->PostTask(
++        FROM_HERE, base::BindOnce(&AiControlService::OnWebSocketAccepted,
++                                  owner_, connection_id));
++  }
++
++  void OnWebSocketMessage(int connection_id, std::string data) override {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(io_sequence_checker_);
++    if (active_connection_id_ != connection_id) {
++      return;
++    }
++    if (data.size() > kMaxMessageSize) {
++      server_->Close(connection_id);
++      return;
++    }
++    ui_task_runner_->PostTask(
++        FROM_HERE, base::BindOnce(&AiControlService::OnWebSocketMessage,
++                                  owner_, connection_id, std::move(data)));
++  }
++
++  void OnClose(int connection_id) override {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(io_sequence_checker_);
++    if (active_connection_id_ != connection_id) {
++      return;
++    }
++    active_connection_id_.reset();
++    ui_task_runner_->PostTask(
++        FROM_HERE, base::BindOnce(&AiControlService::OnWebSocketClosed, owner_,
++                                  connection_id));
++  }
++
++  base::WeakPtr<AiControlService> owner_;
++  const std::string token_;
++  const scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
++  std::unique_ptr<net::HttpServer> server_;
++  std::optional<int> active_connection_id_;
++  int port_ = -1;
++  SEQUENCE_CHECKER(io_sequence_checker_);
++};
++
++std::unique_ptr<AiControlService> AiControlService::CreateFromCommandLine(
++    const base::CommandLine& command_line,
++    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
++  if (!command_line.HasSwitch(kPortSwitch)) {
++    return nullptr;
++  }
++
++  int port = -1;
++  if (!base::StringToInt(command_line.GetSwitchValueASCII(kPortSwitch), &port) ||
++      port < 0 || port > 65535) {
++    LOG(ERROR) << "Invalid --ai-control-port value";
++    return nullptr;
++  }
++  base::FilePath info_file = command_line.GetSwitchValuePath(kInfoFileSwitch);
++  if (!info_file.IsAbsolute()) {
++    LOG(ERROR) << "--ai-control-info-file must be an absolute path";
++    return nullptr;
++  }
++
++  return std::unique_ptr<AiControlService>(new AiControlService(
++      std::move(io_task_runner), port, std::move(info_file),
++      base::HexEncode(base::RandBytesAsVector(32)),
++      base::Uuid::GenerateRandomV4().AsLowercaseString()));
++}
++
++AiControlService* AiControlService::Get() {
++  return g_ai_control_service;
++}
++
++AiControlService::AiControlService(
++    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
++    int port,
++    base::FilePath info_file,
++    std::string token,
++    std::string browser_instance_id)
++    : io_task_runner_(std::move(io_task_runner)),
++      info_file_(std::move(info_file)),
++      token_(std::move(token)),
++      browser_instance_id_(std::move(browser_instance_id)) {
++  CHECK(!g_ai_control_service);
++  g_ai_control_service = this;
++  io_thread_data_ = std::make_unique<IOThreadData>(
++      weak_ptr_factory_.GetWeakPtr(), token_,
++      base::SingleThreadTaskRunner::GetCurrentDefault());
++  io_task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&IOThreadData::Start,
++                                base::Unretained(io_thread_data_.get()), port));
++}
++
++AiControlService::~AiControlService() {
++  CHECK_EQ(g_ai_control_service, this);
++  g_ai_control_service = nullptr;
++  weak_ptr_factory_.InvalidateWeakPtrs();
++  io_task_runner_->DeleteSoon(FROM_HERE, std::move(io_thread_data_));
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock()},
++      base::BindOnce(base::IgnoreResult(&base::DeleteFile), info_file_));
++}
++
++void AiControlService::OnServerCreated(int port) {
++  if (port < 0) {
++    LOG(ERROR) << "Failed to start AI control server";
++    return;
++  }
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock()},
++      base::BindOnce(&WriteInfoFile, info_file_, port, token_,
++                     browser_instance_id_));
++}
++
++void AiControlService::OnWebSocketAccepted(int connection_id) {
++  active_connection_id_ = connection_id;
++  base::DictValue ready;
++  ready.Set("eventSeq", 1);
++  ready.Set("method", "Browser.ready");
++  ready.SetByDottedPath("params.protocolVersion", 1);
++  ready.SetByDottedPath("params.browserInstanceId", browser_instance_id_);
++  SendMessage(connection_id, std::move(ready));
++}
++
++void AiControlService::OnWebSocketMessage(int connection_id,
++                                           std::string message) {
++  if (active_connection_id_ != connection_id) {
++    return;
++  }
++  std::optional<base::DictValue> request = base::JSONReader::ReadDict(message, 0);
++  if (!request.has_value()) {
++    base::DictValue response;
++    response.Set("error", MakeError("INVALID_REQUEST", "Expected JSON object"));
++    SendMessage(connection_id, std::move(response));
++    return;
++  }
++  SendMessage(connection_id, HandleCommand(*request));
++}
++
++void AiControlService::OnWebSocketClosed(int connection_id) {
++  if (active_connection_id_ == connection_id) {
++    active_connection_id_.reset();
++  }
++}
++
++void AiControlService::SendMessage(int connection_id, base::DictValue message) {
++  std::string json;
++  if (!base::JSONWriter::Write(message, &json)) {
++    return;
++  }
++  io_task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&IOThreadData::Send,
++                                base::Unretained(io_thread_data_.get()),
++                                connection_id, std::move(json)));
++}
++
++base::DictValue AiControlService::HandleCommand(
++    const base::DictValue& request) {
++  base::DictValue response;
++  std::optional<int> id = request.FindInt("id");
++  const std::string* method = request.FindString("method");
++  if (id.has_value()) {
++    response.Set("id", *id);
++  }
++  if (!id.has_value() || !method) {
++    response.Set("error",
++                 MakeError("INVALID_REQUEST", "id and method are required"));
++    return response;
++  }
++
++  base::DictValue result;
++  if (*method == "Browser.getVersion") {
++    result.Set("protocolVersion", 1);
++    result.Set("browserInstanceId", browser_instance_id_);
++  } else if (*method == "Browser.getTabs") {
++    result.Set("tabs", BuildTabsSnapshot());
++  } else {
++    response.Set("error", MakeError("METHOD_NOT_FOUND", "Unknown method"));
++    return response;
++  }
++  response.Set("result", std::move(result));
++  return response;
++}
++
++base::ListValue AiControlService::BuildTabsSnapshot() {
++  base::ListValue tabs;
++  for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
++    if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
++        browser->GetProfile()->IsOffTheRecord()) {
++      continue;
++    }
++    TabStripModel* model = browser->GetTabStripModel();
++    for (int index = 0; index < model->count(); ++index) {
++      tabs::TabInterface* tab = model->GetTabAtIndex(index);
++      content::WebContents* contents = tab->GetContents();
++      if (!contents) {
++        continue;
++      }
++      base::DictValue value;
++      value.Set("tabId",
++                base::StringPrintf("tab-%d", tab->GetHandle().raw_value()));
++      value.Set("pageTargetId",
++                content::DevToolsAgentHost::GetOrCreateFor(contents)->GetId());
++      value.Set("windowId", browser->GetSessionID().id());
++      value.Set("index", index);
++      value.Set("active", model->GetActiveWebContents() == contents);
++      value.Set("title", base::UTF16ToUTF8(contents->GetTitle()));
++      value.Set("url", contents->GetLastCommittedURL().spec());
++      tabs.Append(std::move(value));
++    }
++  }
++  return tabs;
++}
++
++}  // namespace ai_control
+diff --git a/patch-staging/001-new/chrome/browser/ai_control/ai_control_service.h b/chrome/browser/ai_control/ai_control_service.h
+new file mode 100644
+index 0000000..fd70c50
+--- /dev/null
++++ b/chrome/browser/ai_control/ai_control_service.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_AI_CONTROL_AI_CONTROL_SERVICE_H_
++#define CHROME_BROWSER_AI_CONTROL_AI_CONTROL_SERVICE_H_
++
++#include <memory>
++#include <optional>
++#include <string>
++
++#include "base/files/file_path.h"
++#include "base/memory/weak_ptr.h"
++#include "base/values.h"
++
++namespace base {
++class CommandLine;
++class SingleThreadTaskRunner;
++}  // namespace base
++
++namespace ai_control {
++
++class AiControlService {
++ public:
++  static std::unique_ptr<AiControlService> CreateFromCommandLine(
++      const base::CommandLine& command_line,
++      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
++  static AiControlService* Get();
++
++  AiControlService(const AiControlService&) = delete;
++  AiControlService& operator=(const AiControlService&) = delete;
++  ~AiControlService();
++
++ private:
++  class IOThreadData;
++
++  AiControlService(scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
++                   int port,
++                   base::FilePath info_file,
++                   std::string token,
++                   std::string browser_instance_id);
++
++  void OnServerCreated(int port);
++  void OnWebSocketAccepted(int connection_id);
++  void OnWebSocketMessage(int connection_id, std::string message);
++  void OnWebSocketClosed(int connection_id);
++  void SendMessage(int connection_id, base::DictValue message);
++  base::DictValue HandleCommand(const base::DictValue& request);
++  base::ListValue BuildTabsSnapshot();
++
++  const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
++  const base::FilePath info_file_;
++  const std::string token_;
++  const std::string browser_instance_id_;
++  std::optional<int> active_connection_id_;
++  std::unique_ptr<IOThreadData> io_thread_data_;
++
++  base::WeakPtrFactory<AiControlService> weak_ptr_factory_{this};
++};
++
++}  // namespace ai_control
++
++#endif  // CHROME_BROWSER_AI_CONTROL_AI_CONTROL_SERVICE_H_
+diff --git a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc
+index 798545a..11484ae 100644
+--- a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc
++++ b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.cc
+@@ -9,6 +9,7 @@
+ #include "base/command_line.h"
+ #include "base/path_service.h"
+ #include "build/build_config.h"
++#include "chrome/browser/ai_control/ai_control_service.h"
+ #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
+ #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
+ #include "chrome/browser/browser_process.h"
+@@ -25,12 +26,12 @@
+ #include "components/ui_devtools/devtools_server.h"
+ #include "components/ui_devtools/switches.h"
+ #include "components/ui_devtools/views/server_holder.h"
++#include "content/public/browser/browser_thread.h"
+ #include "sandbox/policy/switches.h"
+ 
+ #if defined(USE_AURA)
+ #include "base/run_loop.h"
+ #include "content/public/browser/browser_context.h"
+-#include "content/public/browser/browser_thread.h"
+ #include "services/viz/public/cpp/gpu/gpu.h"  // nogncheck
+ #if !BUILDFLAG(IS_CHROMEOS)
+ #include "ui/display/screen.h"
+@@ -181,9 +182,13 @@ void ChromeBrowserMainExtraPartsViews::PostBrowserStart() {
+   relaunch_notification_controller_ =
+       std::make_unique<RelaunchNotificationController>(
+           UpgradeDetector::GetInstance());
++  ai_control_service_ = ai_control::AiControlService::CreateFromCommandLine(
++      *base::CommandLine::ForCurrentProcess(),
++      content::GetIOThreadTaskRunner());
+ }
+ 
+ void ChromeBrowserMainExtraPartsViews::PostMainMessageLoopRun() {
++  ai_control_service_.reset();
+   // The relaunch notification controller acts on timer-based events. Tear it
+   // down explicitly here to avoid a case where such an event arrives during
+   // shutdown.
+diff --git a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h
+index 6b84def..fa67c0b 100644
+--- a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h
++++ b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views.h
+@@ -28,6 +28,10 @@ class WMState;
+ 
+ class RelaunchNotificationController;
+ 
++namespace ai_control {
++class AiControlService;
++}
++
+ class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
+  public:
+   ChromeBrowserMainExtraPartsViews();
+@@ -66,6 +70,7 @@ class ChromeBrowserMainExtraPartsViews : public ChromeBrowserMainExtraParts {
+   // Manages the relaunch notification prompts.
+   std::unique_ptr<RelaunchNotificationController>
+       relaunch_notification_controller_;
++  std::unique_ptr<ai_control::AiControlService> ai_control_service_;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_CHROME_BROWSER_MAIN_EXTRA_PARTS_VIEWS_H_

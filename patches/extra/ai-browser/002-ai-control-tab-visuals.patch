@@ -1,0 +1,340 @@
+diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai_control/ai_control_service.cc
+index 59d543b..41d5ea8 100644
+--- a/chrome/browser/ai_control/ai_control_service.cc
++++ b/chrome/browser/ai_control/ai_control_service.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ai_control/ai_control_service.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <memory>
+ #include <string_view>
+ #include <utility>
+@@ -20,16 +22,21 @@
+ #include "base/process/process_handle.h"
+ #include "base/rand_util.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/task/thread_pool.h"
++#include "base/time/time.h"
+ #include "base/uuid.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/tabs/tab.h"
++#include "chrome/browser/ui/views/tabs/tab_strip.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "crypto/secure_util.h"
+@@ -79,6 +86,34 @@ base::DictValue MakeError(std::string_view code, std::string_view message) {
+   return error;
+ }
+ 
++std::optional<int32_t> ParseTabId(std::string_view tab_id) {
++  constexpr std::string_view kPrefix = "tab-";
++  if (!base::StartsWith(tab_id, kPrefix)) {
++    return std::nullopt;
++  }
++  int value = 0;
++  if (!base::StringToInt(tab_id.substr(kPrefix.size()), &value) || value <= 0) {
++    return std::nullopt;
++  }
++  return value;
++}
++
++std::optional<SkColor> ParseColor(std::string_view text) {
++  if (!text.empty() && text.front() == '#') {
++    text.remove_prefix(1);
++  }
++  if (text.size() != 6 && text.size() != 8) {
++    return std::nullopt;
++  }
++  uint32_t value = 0;
++  if (!base::HexStringToUInt(text, &value)) {
++    return std::nullopt;
++  }
++  return text.size() == 6 ? SkColorSetARGB(0xff, (value >> 16) & 0xff,
++                                           (value >> 8) & 0xff, value & 0xff)
++                          : value;
++}
++
+ void WriteInfoFile(const base::FilePath& path,
+                    int port,
+                    std::string token,
+@@ -306,7 +341,7 @@ void AiControlService::OnWebSocketAccepted(int connection_id) {
+   }
+   active_connection_id_ = connection_id;
+   base::DictValue ready;
+-  ready.Set("eventSeq", 1);
++  ready.Set("eventSeq", static_cast<double>(++event_seq_));
+   ready.Set("method", "Browser.ready");
+   ready.SetByDottedPath("params.protocolVersion", 1);
+   ready.SetByDottedPath("params.browserInstanceId", browser_instance_id_);
+@@ -365,6 +400,51 @@ base::DictValue AiControlService::HandleCommand(
+     result.Set("browserInstanceId", browser_instance_id_);
+   } else if (*method == "Browser.getTabs") {
+     result.Set("tabs", BuildTabsSnapshot());
++  } else if (*method == "Tab.setVisual") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    const std::string* color = params ? params->FindString("color") : nullptr;
++    const std::string* animation =
++        params ? params->FindString("animation") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    std::optional<SkColor> parsed_color =
++        color ? ParseColor(*color) : std::nullopt;
++    const std::string animation_value = animation ? *animation : "none";
++    if (!handle.has_value() || !TabExists(*handle)) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    if (color && !parsed_color.has_value()) {
++      response.Set("error",
++                   MakeError("INVALID_PARAMS", "color must be #RRGGBB or #AARRGGBB"));
++      return response;
++    }
++    if (animation_value != "none" && animation_value != "pulse" &&
++        animation_value != "loading") {
++      response.Set("error",
++                   MakeError("INVALID_PARAMS", "Unsupported animation"));
++      return response;
++    }
++    TabVisualState& visual = tab_visuals_[*handle];
++    visual.color = parsed_color;
++    visual.animation = animation_value;
++    ++visual.state_version;
++    ScheduleTabPaint(*handle);
++    UpdateAnimationTimer();
++    result.Set("stateVersion", static_cast<double>(visual.state_version));
++  } else if (*method == "Tab.clearVisual") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    if (!handle.has_value() || !TabExists(*handle)) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    tab_visuals_.erase(*handle);
++    ScheduleTabPaint(*handle);
++    UpdateAnimationTimer();
+   } else {
+     response.Set("error", MakeError("METHOD_NOT_FOUND", "Unknown method"));
+     return response;
+@@ -373,6 +453,86 @@ base::DictValue AiControlService::HandleCommand(
+   return response;
+ }
+ 
++std::optional<SkColor> AiControlService::GetTabColor(int32_t tab_handle) const {
++  auto it = tab_visuals_.find(tab_handle);
++  if (it == tab_visuals_.end() || !it->second.color.has_value()) {
++    return std::nullopt;
++  }
++  SkColor color = *it->second.color;
++  double opacity = 1.0;
++  const double seconds = base::TimeTicks::Now().since_origin().InSecondsF();
++  if (it->second.animation == "pulse") {
++    opacity = 0.62 + 0.38 * ((std::sin(seconds * 5.23598776) + 1.0) / 2.0);
++  } else if (it->second.animation == "loading") {
++    const double phase = std::fmod(seconds, 1.4) / 1.4;
++    opacity = 0.48 + 0.52 * (1.0 - std::abs(phase * 2.0 - 1.0));
++  }
++  return SkColorSetA(color, static_cast<U8CPU>(SkColorGetA(color) * opacity));
++}
++
++void AiControlService::NotifyTabClicked(int32_t tab_handle) {
++  if (!active_connection_id_.has_value()) {
++    return;
++  }
++  base::DictValue event;
++  event.Set("eventSeq", static_cast<double>(++event_seq_));
++  event.Set("method", "Tab.clicked");
++  event.SetByDottedPath("params.tabId",
++                        base::StringPrintf("tab-%d", tab_handle));
++  SendMessage(*active_connection_id_, std::move(event));
++}
++
++bool AiControlService::TabExists(int32_t tab_handle) const {
++  for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
++    TabStripModel* model = browser->GetTabStripModel();
++    for (int index = 0; index < model->count(); ++index) {
++      if (model->GetTabAtIndex(index)->GetHandle().raw_value() == tab_handle) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
++void AiControlService::ScheduleTabPaint(int32_t tab_handle) const {
++  for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
++    TabStripModel* model = browser->GetTabStripModel();
++    for (int index = 0; index < model->count(); ++index) {
++      if (model->GetTabAtIndex(index)->GetHandle().raw_value() != tab_handle) {
++        continue;
++      }
++      BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
++      if (browser_view && browser->IsTabStripVisible()) {
++        browser_view->horizontal_tab_strip_for_testing()
++            ->tab_at(index)
++            ->SchedulePaint();
++      }
++      return;
++    }
++  }
++}
++
++void AiControlService::UpdateAnimationTimer() {
++  const bool has_animation = std::ranges::any_of(
++      tab_visuals_, [](const auto& entry) {
++        return entry.second.animation != "none";
++      });
++  if (has_animation && !animation_timer_.IsRunning()) {
++    animation_timer_.Start(FROM_HERE, base::Milliseconds(50), this,
++                           &AiControlService::OnAnimationTick);
++  } else if (!has_animation) {
++    animation_timer_.Stop();
++  }
++}
++
++void AiControlService::OnAnimationTick() {
++  for (const auto& [handle, visual] : tab_visuals_) {
++    if (visual.animation != "none") {
++      ScheduleTabPaint(handle);
++    }
++  }
++}
++
+ base::ListValue AiControlService::BuildTabsSnapshot() {
+   base::ListValue tabs;
+   for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
+diff --git a/chrome/browser/ai_control/ai_control_service.h b/chrome/browser/ai_control/ai_control_service.h
+index fd70c50..eeed35b 100644
+--- a/chrome/browser/ai_control/ai_control_service.h
++++ b/chrome/browser/ai_control/ai_control_service.h
+@@ -9,9 +9,12 @@
+ #include <optional>
+ #include <string>
+ 
++#include "base/containers/flat_map.h"
+ #include "base/files/file_path.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/timer/timer.h"
+ #include "base/values.h"
++#include "third_party/skia/include/core/SkColor.h"
+ 
+ namespace base {
+ class CommandLine;
+@@ -31,6 +34,9 @@ class AiControlService {
+   AiControlService& operator=(const AiControlService&) = delete;
+   ~AiControlService();
+ 
++  std::optional<SkColor> GetTabColor(int32_t tab_handle) const;
++  void NotifyTabClicked(int32_t tab_handle);
++
+  private:
+   class IOThreadData;
+ 
+@@ -47,6 +53,16 @@ class AiControlService {
+   void SendMessage(int connection_id, base::DictValue message);
+   base::DictValue HandleCommand(const base::DictValue& request);
+   base::ListValue BuildTabsSnapshot();
++  bool TabExists(int32_t tab_handle) const;
++  void ScheduleTabPaint(int32_t tab_handle) const;
++  void UpdateAnimationTimer();
++  void OnAnimationTick();
++
++  struct TabVisualState {
++    std::optional<SkColor> color;
++    std::string animation;
++    uint64_t state_version = 0;
++  };
+ 
+   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
+   const base::FilePath info_file_;
+@@ -54,6 +70,9 @@ class AiControlService {
+   const std::string browser_instance_id_;
+   std::optional<int> active_connection_id_;
+   std::unique_ptr<IOThreadData> io_thread_data_;
++  base::flat_map<int32_t, TabVisualState> tab_visuals_;
++  base::RepeatingTimer animation_timer_;
++  uint64_t event_seq_ = 0;
+ 
+   base::WeakPtrFactory<AiControlService> weak_ptr_factory_{this};
+ };
+diff --git a/chrome/browser/ui/views/tabs/tab.cc b/chrome/browser/ui/views/tabs/tab.cc
+index efa9e31..920bb40 100644
+--- a/chrome/browser/ui/views/tabs/tab.cc
++++ b/chrome/browser/ui/views/tabs/tab.cc
+@@ -27,6 +27,7 @@
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/paint_recorder.h"
+ #include "cc/paint/paint_shader.h"
++#include "chrome/browser/ai_control/ai_control_service.h"
+ #include "chrome/browser/glic/browser_ui/tab_underline_controller.h"
+ #include "chrome/browser/glic/browser_ui/tab_underline_view.h"
+ #include "chrome/browser/glic/public/glic_enabling.h"
+@@ -638,6 +639,12 @@ bool Tab::OnMouseDragged(const ui::MouseEvent& event) {
+ void Tab::OnMouseReleased(const ui::MouseEvent& event) {
+   base::WeakPtr<Tab> self = weak_ptr_factory_.GetWeakPtr();
+   controller_->OnMouseEventInTab(this, event);
++  if ((event.IsOnlyLeftMouseButton() || event.IsOnlyMiddleMouseButton()) &&
++      HitTestPoint(event.location())) {
++    if (auto* service = ai_control::AiControlService::Get()) {
++      service->NotifyTabClicked(tab_handle_.raw_value());
++    }
++  }
+ 
+   // Notify the drag helper that we're done with any potential drag operations.
+   // Clean up the drag helper, which is re-created on the next mouse press.
+diff --git a/chrome/browser/ui/views/tabs/tab.h b/chrome/browser/ui/views/tabs/tab.h
+index e3fe43e..b6d85c6 100644
+--- a/chrome/browser/ui/views/tabs/tab.h
++++ b/chrome/browser/ui/views/tabs/tab.h
+@@ -126,6 +126,7 @@ class Tab : public gfx::AnimationDelegate,
+                        const std::optional<std::string>& name);
+ 
+   TabSlotController* controller() const { return controller_; }
++  tabs::TabHandle tab_handle() const { return tab_handle_; }
+ 
+   // Used to set/check whether this Tab is being animated closed.
+   void SetClosing(bool closing);
+diff --git a/chrome/browser/ui/views/tabs/tab_style_views.cc b/chrome/browser/ui/views/tabs/tab_style_views.cc
+index f5155d8..edd5c67 100644
+--- a/chrome/browser/ui/views/tabs/tab_style_views.cc
++++ b/chrome/browser/ui/views/tabs/tab_style_views.cc
+@@ -17,6 +17,7 @@
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/paint_record.h"
+ #include "cc/paint/paint_shader.h"
++#include "chrome/browser/ai_control/ai_control_service.h"
+ #include "chrome/browser/themes/theme_properties.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -956,10 +957,16 @@ void TabStyleViewsImpl::PaintTabBackgroundFill(
+ 
+   canvas->ClipPath(fill_path, true);
+ 
+-  if (ShouldPaintTabBackgroundColor(selection_state, fill_id.has_value())) {
++  std::optional<SkColor> ai_color;
++  if (auto* service = ai_control::AiControlService::Get()) {
++    ai_color = service->GetTabColor(tab_->tab_handle().raw_value());
++  }
++  if (ai_color.has_value() ||
++      ShouldPaintTabBackgroundColor(selection_state, fill_id.has_value())) {
+     cc::PaintFlags flags;
+     flags.setAntiAlias(true);
+-    flags.setColor(GetCurrentTabBackgroundColor(selection_state, hovered));
++    flags.setColor(ai_color.value_or(
++        GetCurrentTabBackgroundColor(selection_state, hovered)));
+     canvas->DrawRect(gfx::ScaleToEnclosingRect(tab_->GetLocalBounds(), scale),
+                      flags);
+   }

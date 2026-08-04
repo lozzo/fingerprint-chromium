@@ -1,0 +1,161 @@
+From: AI Browser Control <ai-control@localhost>
+Subject: [PATCH] Harden controller ownership and command validation
+
+Keep controller ownership explicit, validate overlay payloads before changing
+tab state, and make state discovery work for untouched tabs.
+
+---
+ chrome/browser/ai_control/ai_control_service.cc | 78 ++++++++++++++++++-------
+ 1 file changed, 54 insertions(+), 24 deletions(-)
+
+diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai_control/ai_control_service.cc
+--- a/chrome/browser/ai_control/ai_control_service.cc
++++ b/chrome/browser/ai_control/ai_control_service.cc
+@@ -56,5 +56,7 @@ constexpr char kInfoFileSwitch[] = "ai-control-info-file";
+ constexpr char kWebSocketPath[] = "/ai-control/v1";
+ constexpr size_t kMaxMessageSize = 64 * 1024;
++constexpr size_t kMaxOverlayTitleSize = 200;
++constexpr size_t kMaxOverlayMessageSize = 2000;
+ constexpr int kBacklog = 8;
+ 
+ AiControlService* g_ai_control_service = nullptr;
+@@ -236,7 +238,9 @@ class AiControlService::IOThreadData : public net::HttpServer::Delegate {
+ 
+     if (active_connection_id_.has_value() &&
+         *active_connection_id_ != connection_id) {
+-      server_->Close(*active_connection_id_);
++      server_->Send(connection_id, net::HTTP_CONFLICT, "Controller active",
++                    "text/plain", kTrafficAnnotation);
++      return;
+     }
+     active_connection_id_ = connection_id;
+     server_->AcceptWebSocket(connection_id, info, kTrafficAnnotation);
+@@ -492,6 +495,22 @@ base::DictValue AiControlService::HandleCommand(
+       response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
+       return response;
+     }
++    const std::string* title = params ? params->FindString("title") : nullptr;
++    const std::string* message =
++        params ? params->FindString("message") : nullptr;
++    std::optional<int> progress =
++        params ? params->FindInt("progress") : std::nullopt;
++    if ((title && title->size() > kMaxOverlayTitleSize) ||
++        (message && message->size() > kMaxOverlayMessageSize)) {
++      response.Set("error",
++                   MakeError("INVALID_PARAMS", "Overlay text is too long"));
++      return response;
++    }
++    if (progress.has_value() && (*progress < 0 || *progress > 100)) {
++      response.Set("error",
++                   MakeError("INVALID_PARAMS", "progress must be 0..100"));
++      return response;
++    }
+     TabVisualState& state = tab_visuals_[*handle];
+     if (*method == "Overlay.hide") {
+       if (state.ownership == "ai") {
+@@ -503,18 +527,13 @@ base::DictValue AiControlService::HandleCommand(
+       state.overlay_visible = false;
+     } else {
+       state.overlay_visible = true;
+-      if (const std::string* title = params->FindString("title")) {
++      if (title) {
+         state.overlay_title = *title;
+       }
+-      if (const std::string* message = params->FindString("message")) {
++      if (message) {
+         state.overlay_message = *message;
+       }
+-      if (std::optional<int> progress = params->FindInt("progress")) {
+-        if (*progress < 0 || *progress > 100) {
+-          response.Set("error",
+-                       MakeError("INVALID_PARAMS", "progress must be 0..100"));
+-          return response;
+-        }
++      if (progress.has_value()) {
+         state.overlay_progress = *progress;
+       }
+     }
+@@ -531,6 +549,15 @@ base::DictValue AiControlService::HandleCommand(
+       response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
+       return response;
+     }
++    const std::string* title = params ? params->FindString("title") : nullptr;
++    const std::string* message =
++        params ? params->FindString("message") : nullptr;
++    if ((title && title->size() > kMaxOverlayTitleSize) ||
++        (message && message->size() > kMaxOverlayMessageSize)) {
++      response.Set("error",
++                   MakeError("INVALID_PARAMS", "Overlay text is too long"));
++      return response;
++    }
+     TabVisualState& state = tab_visuals_[*handle];
+     content::WebContents* contents = tab->GetContents();
+     if (state.locked_contents != contents || !state.input_lock.has_value()) {
+@@ -551,13 +581,11 @@ base::DictValue AiControlService::HandleCommand(
+     state.overlay_visible = true;
+     state.handoff_pending = false;
+     state.handoff_request_id.clear();
+-    if (params) {
+-      if (const std::string* title = params->FindString("title")) {
+-        state.overlay_title = *title;
+-      }
+-      if (const std::string* message = params->FindString("message")) {
+-        state.overlay_message = *message;
+-      }
++    if (title) {
++      state.overlay_title = *title;
++    }
++    if (message) {
++      state.overlay_message = *message;
+     }
+     if (!state.color.has_value()) {
+       state.color = SkColorSetRGB(0x0b, 0x57, 0xd0);
+@@ -596,6 +624,7 @@ base::DictValue AiControlService::HandleCommand(
+     state.ownership = "human";
+     state.overlay_visible = false;
+     state.handoff_pending = false;
++    state.handoff_request_id.clear();
+     state.animation = "none";
+     ++state.state_version;
+     result.Set("stateVersion", static_cast<double>(state.state_version));
+@@ -631,16 +660,23 @@ base::DictValue AiControlService::HandleCommand(
+     const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
+     std::optional<int32_t> handle =
+         tab_id ? ParseTabId(*tab_id) : std::nullopt;
+-    auto state_it = handle ? tab_visuals_.find(*handle) : tab_visuals_.end();
+-    if (!handle.has_value() || state_it == tab_visuals_.end()) {
++    if (!handle.has_value() || !TabExists(*handle)) {
+       response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
+       return response;
+     }
+-    result.Set("ownership", state_it->second.ownership);
+-    result.Set("overlayVisible", state_it->second.overlay_visible);
+-    result.Set("handoffPending", state_it->second.handoff_pending);
+-    result.Set("stateVersion",
+-               static_cast<double>(state_it->second.state_version));
++    auto state_it = tab_visuals_.find(*handle);
++    if (state_it == tab_visuals_.end()) {
++      result.Set("ownership", "human");
++      result.Set("overlayVisible", false);
++      result.Set("handoffPending", false);
++      result.Set("stateVersion", 0);
++    } else {
++      result.Set("ownership", state_it->second.ownership);
++      result.Set("overlayVisible", state_it->second.overlay_visible);
++      result.Set("handoffPending", state_it->second.handoff_pending);
++      result.Set("stateVersion",
++                 static_cast<double>(state_it->second.state_version));
++    }
+   } else {
+     response.Set("error", MakeError("METHOD_NOT_FOUND", "Unknown method"));
+     return response;
+@@ -795,6 +829,7 @@ void AiControlService::ReleaseAllAiControl() {
+     state.ownership = "human";
+     state.overlay_visible = false;
+     state.handoff_pending = false;
++    state.handoff_request_id.clear();
+     state.animation = "none";
+     ++state.state_version;
+     ScheduleTabPaint(handle);
+-- 
+2.39.5

@@ -1,0 +1,832 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 7db5444..3b600a8 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -219,6 +219,8 @@ static_library("browser") {
+     "after_startup_task_utils.h",
+     "ai_control/ai_control_service.cc",
+     "ai_control/ai_control_service.h",
++    "ai_control/ai_control_overlay_web_view.cc",
++    "ai_control/ai_control_overlay_web_view.h",
+     "bad_message.cc",
+     "bad_message.h",
+     "browser_about_handler.cc",
+diff --git a/patch-staging/003-new/chrome/browser/ai_control/ai_control_overlay_web_view.cc b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+new file mode 100644
+index 0000000..1b54bb6
+--- /dev/null
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+@@ -0,0 +1,194 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ai_control/ai_control_overlay_web_view.h"
++
++#include <algorithm>
++#include <string_view>
++
++#include "base/base64.h"
++#include "base/containers/flat_set.h"
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "base/strings/escape.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/ai_control/ai_control_service.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_container_view.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "url/gurl.h"
++
++namespace ai_control {
++namespace {
++
++using OverlaySet = base::flat_set<AiControlOverlayWebView*>;
++
++OverlaySet& GetOverlaySet() {
++  static base::NoDestructor<OverlaySet> overlays;
++  return *overlays;
++}
++
++std::string Escape(std::string_view value) {
++  return base::EscapeForHTML(value);
++}
++
++}  // namespace
++
++AiControlOverlayWebView::AiControlOverlayWebView(
++    BrowserWindowInterface* browser)
++    : browser_(browser) {
++  SetBrowserContext(browser->GetProfile());
++  SetVisible(false);
++  browser_->GetTabStripModel()->AddObserver(this);
++  GetOverlaySet().insert(this);
++}
++
++AiControlOverlayWebView::~AiControlOverlayWebView() {
++  GetOverlaySet().erase(this);
++  browser_->GetTabStripModel()->RemoveObserver(this);
++  SetWebContents(nullptr);
++}
++
++void AiControlOverlayWebView::RefreshAll() {
++  for (AiControlOverlayWebView* overlay : GetOverlaySet()) {
++    overlay->Refresh();
++  }
++}
++
++void AiControlOverlayWebView::ObserveContainer(views::View* container) {
++  container_ = container;
++  container_observation_.Observe(container);
++  SetBoundsRect(container->GetContentsBounds());
++}
++
++void AiControlOverlayWebView::Refresh() {
++  AiControlService* service = AiControlService::Get();
++  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
++  if (!container_ || !browser_view ||
++      browser_view->GetActiveContentsContainerView() != container_) {
++    HideOverlay();
++    return;
++  }
++  tabs::TabInterface* tab = browser_->GetTabStripModel()->GetActiveTab();
++  if (!service || !tab) {
++    HideOverlay();
++    return;
++  }
++
++  displayed_tab_handle_ = tab->GetHandle().raw_value();
++  if (!service->GetOverlayPresentation(displayed_tab_handle_).has_value()) {
++    HideOverlay();
++    return;
++  }
++
++  std::string html = BuildHtml();
++  if (html != displayed_html_) {
++    displayed_html_ = html;
++    LoadInitialURL(GURL("data:text/html;base64," + base::Base64Encode(html)));
++  }
++  if (!GetVisible()) {
++    SetVisible(true);
++    if (web_contents()) {
++      web_contents()->WasShown();
++    }
++  }
++  if (web_contents() && web_contents()->GetRenderWidgetHostView()) {
++    web_contents()->GetRenderWidgetHostView()->SetBackgroundColor(
++        SK_ColorTRANSPARENT);
++  }
++}
++
++void AiControlOverlayWebView::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  Refresh();
++}
++
++void AiControlOverlayWebView::DidStartNavigation(
++    content::NavigationHandle* navigation_handle) {
++  if (navigation_handle->GetURL().ref() != "handoff") {
++    return;
++  }
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce([](int32_t tab_handle) {
++        if (AiControlService* service = AiControlService::Get()) {
++          service->NotifyHumanRequested(tab_handle);
++        }
++      }, displayed_tab_handle_));
++}
++
++void AiControlOverlayWebView::OnViewBoundsChanged(views::View* observed_view) {
++  SetBoundsRect(observed_view->GetContentsBounds());
++}
++
++std::string AiControlOverlayWebView::BuildHtml() const {
++  const auto presentation =
++      AiControlService::Get()->GetOverlayPresentation(displayed_tab_handle_);
++  if (!presentation.has_value()) {
++    return std::string();
++  }
++  const std::string progress = presentation->progress.has_value()
++                                   ? base::NumberToString(
++                                         std::clamp(*presentation->progress, 0,
++                                                    100))
++                                   : "38";
++  const std::string action = presentation->handoff_pending
++                                 ? "<span class='waiting'>已请求接管</span>"
++                                 : "<a href='about:blank#handoff'>请求接管</a>";
++  return base::StrCat({
++      "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>",
++      "<meta name='color-scheme' content='light dark'><style>",
++      "*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}",
++      "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;",
++      "letter-spacing:0;background:rgba(18,20,24,.46);color:#202124;display:grid;",
++      "place-items:center;backdrop-filter:blur(3px)}main{width:min(420px,calc(100% - 32px));",
++      "background:#fff;border:1px solid rgba(32,33,36,.18);border-radius:8px;",
++      "box-shadow:0 12px 36px rgba(0,0,0,.22);padding:22px 24px}",
++      ".top{display:flex;align-items:center;gap:14px}.spinner{width:28px;height:28px;",
++      "border:3px solid #d7dbe0;border-top-color:#0b57d0;border-radius:50%;",
++      "animation:spin 1s linear infinite;flex:none}h1{font-size:17px;line-height:1.35;",
++      "margin:0;font-weight:600}p{font-size:13px;line-height:1.55;color:#5f6368;",
++      "margin:12px 0 16px}.track{height:4px;background:#e7e9ec;border-radius:2px;",
++      "overflow:hidden}.bar{height:100%;width:", progress,
++      "%;background:#0b57d0;transition:width .2s ease}.actions{display:flex;",
++      "justify-content:flex-end;margin-top:18px}a{color:#0b57d0;text-decoration:none;",
++      "font-size:13px;font-weight:600;padding:8px 10px;border-radius:4px}",
++      "a:hover{background:#eef3fd}.waiting{font-size:13px;color:#5f6368;padding:8px 10px}",
++      "@keyframes spin{to{transform:rotate(360deg)}}",
++      "@media(prefers-reduced-motion:reduce){.spinner{animation:none}.bar{transition:none}}",
++      "@media(prefers-color-scheme:dark){body{color:#e8eaed;background:rgba(0,0,0,.58)}",
++      "main{background:#202124;border-color:#4a4d51}p,.waiting{color:#bdc1c6}",
++      ".track{background:#3c4043}a{color:#8ab4f8}a:hover{background:#303845}}",
++      "</style></head><body><main><div class='top'><div class='spinner'></div><h1>",
++      Escape(presentation->title), "</h1></div><p>",
++      Escape(presentation->message), "</p><div class='track'><div class='bar'></div>",
++      "</div><div class='actions'>", action,
++      "</div></main></body></html>"});
++}
++
++void AiControlOverlayWebView::HideOverlay() {
++  displayed_tab_handle_ = 0;
++  displayed_html_.clear();
++  if (GetVisible()) {
++    SetVisible(false);
++    if (web_contents()) {
++      web_contents()->WasHidden();
++    }
++  }
++}
++
++BEGIN_METADATA(AiControlOverlayWebView)
++END_METADATA
++
++}  // namespace ai_control
+diff --git a/patch-staging/003-new/chrome/browser/ai_control/ai_control_overlay_web_view.h b/chrome/browser/ai_control/ai_control_overlay_web_view.h
+new file mode 100644
+index 0000000..5ee8358
+--- /dev/null
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_AI_CONTROL_AI_CONTROL_OVERLAY_WEB_VIEW_H_
++#define CHROME_BROWSER_AI_CONTROL_AI_CONTROL_OVERLAY_WEB_VIEW_H_
++
++#include <cstdint>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/controls/webview/webview.h"
++#include "ui/views/view_observer.h"
++
++class BrowserWindowInterface;
++
++namespace content {
++class NavigationHandle;
++}
++
++namespace ai_control {
++
++class AiControlOverlayWebView : public views::WebView,
++                                public TabStripModelObserver,
++                                public views::ViewObserver {
++  METADATA_HEADER(AiControlOverlayWebView, views::WebView)
++
++ public:
++  explicit AiControlOverlayWebView(BrowserWindowInterface* browser);
++  AiControlOverlayWebView(const AiControlOverlayWebView&) = delete;
++  AiControlOverlayWebView& operator=(const AiControlOverlayWebView&) = delete;
++  ~AiControlOverlayWebView() override;
++
++  static void RefreshAll();
++  void ObserveContainer(views::View* container);
++  void Refresh();
++
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++  void DidStartNavigation(
++      content::NavigationHandle* navigation_handle) override;
++  void OnViewBoundsChanged(views::View* observed_view) override;
++
++ private:
++  std::string BuildHtml() const;
++  void HideOverlay();
++
++  const raw_ptr<BrowserWindowInterface> browser_;
++  raw_ptr<views::View> container_ = nullptr;
++  int32_t displayed_tab_handle_ = 0;
++  std::string displayed_html_;
++  base::ScopedObservation<views::View, views::ViewObserver>
++      container_observation_{this};
++};
++
++}  // namespace ai_control
++
++#endif  // CHROME_BROWSER_AI_CONTROL_AI_CONTROL_OVERLAY_WEB_VIEW_H_
+diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai_control/ai_control_service.cc
+index b2ad718..07e0022 100644
+--- a/chrome/browser/ai_control/ai_control_service.cc
++++ b/chrome/browser/ai_control/ai_control_service.cc
+@@ -30,6 +30,7 @@
+ #include "base/time/time.h"
+ #include "base/uuid.h"
+ #include "build/build_config.h"
++#include "chrome/browser/ai_control/ai_control_overlay_web_view.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -37,6 +38,7 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/tabs/tab.h"
+ #include "chrome/browser/ui/views/tabs/tab_strip.h"
++#include "chrome/common/webui_url_constants.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "crypto/secure_util.h"
+@@ -49,6 +51,8 @@
+ #include "net/server/http_server_request_info.h"
+ #include "net/socket/tcp_server_socket.h"
+ #include "net/traffic_annotation/network_traffic_annotation.h"
++#include "third_party/blink/public/common/input/web_input_event.h"
++#include "url/url_constants.h"
+ 
+ namespace ai_control {
+ namespace {
+@@ -114,6 +118,13 @@ std::optional<SkColor> ParseColor(std::string_view text) {
+                           : value;
+ }
+ 
++bool IsEligibleContents(content::WebContents* contents) {
++  const GURL& url = contents->GetLastCommittedURL();
++  return url.SchemeIsHTTPOrHTTPS() || url.SchemeIs(url::kAboutScheme) ||
++         url.SchemeIs(url::kFileScheme) || url.SchemeIs(url::kDataScheme) ||
++         url == GURL(chrome::kChromeUINewTabURL);
++}
++
+ void WriteInfoFile(const base::FilePath& path,
+                    int port,
+                    std::string token,
+@@ -268,6 +279,25 @@ class AiControlService::IOThreadData : public net::HttpServer::Delegate {
+   SEQUENCE_CHECKER(io_sequence_checker_);
+ };
+ 
++AiControlService::OverlayPresentation::OverlayPresentation() = default;
++AiControlService::OverlayPresentation::OverlayPresentation(
++    const OverlayPresentation&) = default;
++AiControlService::OverlayPresentation&
++AiControlService::OverlayPresentation::operator=(
++    const OverlayPresentation&) = default;
++AiControlService::OverlayPresentation::OverlayPresentation(
++    OverlayPresentation&&) = default;
++AiControlService::OverlayPresentation&
++AiControlService::OverlayPresentation::operator=(OverlayPresentation&&) =
++    default;
++AiControlService::OverlayPresentation::~OverlayPresentation() = default;
++
++AiControlService::TabVisualState::TabVisualState() = default;
++AiControlService::TabVisualState::TabVisualState(TabVisualState&&) = default;
++AiControlService::TabVisualState& AiControlService::TabVisualState::operator=(
++    TabVisualState&&) = default;
++AiControlService::TabVisualState::~TabVisualState() = default;
++
+ std::unique_ptr<AiControlService> AiControlService::CreateFromCommandLine(
+     const base::CommandLine& command_line,
+     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
+@@ -340,6 +370,7 @@ void AiControlService::OnServerCreated(int port) {
+ 
+ void AiControlService::OnWebSocketAccepted(int connection_id) {
+   active_connection_id_ = connection_id;
++  disconnect_timer_.Stop();
+   base::DictValue ready;
+   ready.Set("eventSeq", static_cast<double>(++event_seq_));
+   ready.Set("method", "Browser.ready");
+@@ -366,6 +397,8 @@ void AiControlService::OnWebSocketMessage(int connection_id,
+ void AiControlService::OnWebSocketClosed(int connection_id) {
+   if (active_connection_id_ == connection_id) {
+     active_connection_id_.reset();
++    disconnect_timer_.Start(FROM_HERE, base::Seconds(5), this,
++                            &AiControlService::ReleaseAllAiControl);
+   }
+ }
+ 
+@@ -442,9 +475,172 @@ base::DictValue AiControlService::HandleCommand(
+       response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
+       return response;
+     }
+-    tab_visuals_.erase(*handle);
++    TabVisualState& state = tab_visuals_[*handle];
++    state.color.reset();
++    state.animation = "none";
++    ++state.state_version;
++    result.Set("stateVersion", static_cast<double>(state.state_version));
+     ScheduleTabPaint(*handle);
+     UpdateAnimationTimer();
++  } else if (*method == "Overlay.show" || *method == "Overlay.update" ||
++             *method == "Overlay.hide") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    if (!handle.has_value() || !TabExists(*handle)) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    TabVisualState& state = tab_visuals_[*handle];
++    if (*method == "Overlay.hide") {
++      if (state.ownership == "ai") {
++        response.Set("error", MakeError(
++                                  "CONTROL_ACTIVE",
++                                  "Release AI control before hiding overlay"));
++        return response;
++      }
++      state.overlay_visible = false;
++    } else {
++      state.overlay_visible = true;
++      if (const std::string* title = params->FindString("title")) {
++        state.overlay_title = *title;
++      }
++      if (const std::string* message = params->FindString("message")) {
++        state.overlay_message = *message;
++      }
++      if (std::optional<int> progress = params->FindInt("progress")) {
++        if (*progress < 0 || *progress > 100) {
++          response.Set("error",
++                       MakeError("INVALID_PARAMS", "progress must be 0..100"));
++          return response;
++        }
++        state.overlay_progress = *progress;
++      }
++    }
++    ++state.state_version;
++    result.Set("stateVersion", static_cast<double>(state.state_version));
++    RefreshOverlays();
++  } else if (*method == "Control.acquireAi") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    tabs::TabInterface* tab = handle ? FindTab(*handle) : nullptr;
++    if (!handle.has_value() || !tab) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    TabVisualState& state = tab_visuals_[*handle];
++    content::WebContents* contents = tab->GetContents();
++    if (state.locked_contents != contents || !state.input_lock.has_value()) {
++      state.input_lock.reset();
++      state.locked_contents = contents;
++      state.input_lock = contents->IgnoreInputEvents(base::BindRepeating(
++          [](const blink::WebInputEvent& event) {
++            return (event.GetModifiers() &
++                    blink::WebInputEvent::kFromDebugger) != 0;
++          }));
++    }
++    if (!state.discard_subscription) {
++      state.discard_subscription = tab->RegisterWillDiscardContents(
++          base::BindRepeating(&AiControlService::OnWillDiscardContents,
++                              weak_ptr_factory_.GetWeakPtr()));
++    }
++    state.ownership = "ai";
++    state.overlay_visible = true;
++    state.handoff_pending = false;
++    state.handoff_request_id.clear();
++    if (params) {
++      if (const std::string* title = params->FindString("title")) {
++        state.overlay_title = *title;
++      }
++      if (const std::string* message = params->FindString("message")) {
++        state.overlay_message = *message;
++      }
++    }
++    if (!state.color.has_value()) {
++      state.color = SkColorSetRGB(0x0b, 0x57, 0xd0);
++      state.animation = "loading";
++    }
++    ++state.state_version;
++    result.Set("stateVersion", static_cast<double>(state.state_version));
++    result.Set("ownership", state.ownership);
++    ScheduleTabPaint(*handle);
++    UpdateAnimationTimer();
++    RefreshOverlays();
++  } else if (*method == "Control.releaseAi" ||
++             *method == "Control.grantHuman") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    auto state_it = handle ? tab_visuals_.find(*handle) : tab_visuals_.end();
++    if (!handle.has_value() || state_it == tab_visuals_.end()) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    TabVisualState& state = state_it->second;
++    if (*method == "Control.grantHuman") {
++      const std::string* request_id = params->FindString("requestId");
++      if (!state.handoff_pending || !request_id ||
++          *request_id != state.handoff_request_id) {
++        response.Set("error",
++                     MakeError("STALE_REQUEST", "Unknown handoff request"));
++        return response;
++      }
++    }
++    state.input_lock.reset();
++    state.discard_subscription = {};
++    state.locked_contents = nullptr;
++    state.ownership = "human";
++    state.overlay_visible = false;
++    state.handoff_pending = false;
++    state.animation = "none";
++    ++state.state_version;
++    result.Set("stateVersion", static_cast<double>(state.state_version));
++    result.Set("ownership", state.ownership);
++    ScheduleTabPaint(*handle);
++    UpdateAnimationTimer();
++    RefreshOverlays();
++  } else if (*method == "Control.denyHuman") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    auto state_it = handle ? tab_visuals_.find(*handle) : tab_visuals_.end();
++    if (!handle.has_value() || state_it == tab_visuals_.end()) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    const std::string* request_id = params->FindString("requestId");
++    if (!state_it->second.handoff_pending || !request_id ||
++        *request_id != state_it->second.handoff_request_id) {
++      response.Set("error",
++                   MakeError("STALE_REQUEST", "Unknown handoff request"));
++      return response;
++    }
++    state_it->second.handoff_pending = false;
++    state_it->second.handoff_request_id.clear();
++    ++state_it->second.state_version;
++    result.Set("stateVersion",
++               static_cast<double>(state_it->second.state_version));
++    RefreshOverlays();
++  } else if (*method == "Control.getState") {
++    const base::DictValue* params = request.FindDict("params");
++    const std::string* tab_id = params ? params->FindString("tabId") : nullptr;
++    std::optional<int32_t> handle =
++        tab_id ? ParseTabId(*tab_id) : std::nullopt;
++    auto state_it = handle ? tab_visuals_.find(*handle) : tab_visuals_.end();
++    if (!handle.has_value() || state_it == tab_visuals_.end()) {
++      response.Set("error", MakeError("INVALID_TAB", "Unknown tabId"));
++      return response;
++    }
++    result.Set("ownership", state_it->second.ownership);
++    result.Set("overlayVisible", state_it->second.overlay_visible);
++    result.Set("handoffPending", state_it->second.handoff_pending);
++    result.Set("stateVersion",
++               static_cast<double>(state_it->second.state_version));
+   } else {
+     response.Set("error", MakeError("METHOD_NOT_FOUND", "Unknown method"));
+     return response;
+@@ -470,8 +666,22 @@ std::optional<SkColor> AiControlService::GetTabColor(int32_t tab_handle) const {
+   return SkColorSetA(color, static_cast<U8CPU>(SkColorGetA(color) * opacity));
+ }
+ 
++std::optional<AiControlService::OverlayPresentation>
++AiControlService::GetOverlayPresentation(int32_t tab_handle) const {
++  auto it = tab_visuals_.find(tab_handle);
++  if (it == tab_visuals_.end() || !it->second.overlay_visible) {
++    return std::nullopt;
++  }
++  OverlayPresentation presentation;
++  presentation.title = it->second.overlay_title;
++  presentation.message = it->second.overlay_message;
++  presentation.progress = it->second.overlay_progress;
++  presentation.handoff_pending = it->second.handoff_pending;
++  return presentation;
++}
++
+ void AiControlService::NotifyTabClicked(int32_t tab_handle) {
+-  if (!active_connection_id_.has_value()) {
++  if (!active_connection_id_.has_value() || !TabExists(tab_handle)) {
+     return;
+   }
+   base::DictValue event;
+@@ -482,16 +692,53 @@ void AiControlService::NotifyTabClicked(int32_t tab_handle) {
+   SendMessage(*active_connection_id_, std::move(event));
+ }
+ 
+-bool AiControlService::TabExists(int32_t tab_handle) const {
++void AiControlService::NotifyHumanRequested(int32_t tab_handle) {
++  auto it = tab_visuals_.find(tab_handle);
++  if (it == tab_visuals_.end() || it->second.ownership != "ai" ||
++      it->second.handoff_pending) {
++    return;
++  }
++  TabVisualState& state = it->second;
++  state.handoff_pending = true;
++  state.handoff_request_id = base::StringPrintf(
++      "handoff-%llu",
++      static_cast<unsigned long long>(++next_handoff_request_id_));
++  ++state.state_version;
++  if (active_connection_id_.has_value()) {
++    base::DictValue event;
++    event.Set("eventSeq", static_cast<double>(++event_seq_));
++    event.Set("method", "Control.humanRequested");
++    event.SetByDottedPath("params.tabId",
++                          base::StringPrintf("tab-%d", tab_handle));
++    event.SetByDottedPath("params.requestId", state.handoff_request_id);
++    event.SetByDottedPath("params.stateVersion",
++                          static_cast<double>(state.state_version));
++    SendMessage(*active_connection_id_, std::move(event));
++  }
++  RefreshOverlays();
++}
++
++tabs::TabInterface* AiControlService::FindTab(int32_t tab_handle) const {
+   for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
++    if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
++        browser->GetProfile()->IsOffTheRecord() ||
++        browser->GetProfile()->IsGuestSession()) {
++      continue;
++    }
+     TabStripModel* model = browser->GetTabStripModel();
+     for (int index = 0; index < model->count(); ++index) {
+-      if (model->GetTabAtIndex(index)->GetHandle().raw_value() == tab_handle) {
+-        return true;
++      tabs::TabInterface* tab = model->GetTabAtIndex(index);
++      if (tab->GetHandle().raw_value() == tab_handle &&
++          IsEligibleContents(tab->GetContents())) {
++        return tab;
+       }
+     }
+   }
+-  return false;
++  return nullptr;
++}
++
++bool AiControlService::TabExists(int32_t tab_handle) const {
++  return FindTab(tab_handle) != nullptr;
+ }
+ 
+ void AiControlService::ScheduleTabPaint(int32_t tab_handle) const {
+@@ -533,18 +780,58 @@ void AiControlService::OnAnimationTick() {
+   }
+ }
+ 
++void AiControlService::RefreshOverlays() {
++  AiControlOverlayWebView::RefreshAll();
++}
++
++void AiControlService::ReleaseAllAiControl() {
++  for (auto& [handle, state] : tab_visuals_) {
++    state.input_lock.reset();
++    state.discard_subscription = {};
++    state.locked_contents = nullptr;
++    state.ownership = "human";
++    state.overlay_visible = false;
++    state.handoff_pending = false;
++    state.animation = "none";
++    ++state.state_version;
++    ScheduleTabPaint(handle);
++  }
++  UpdateAnimationTimer();
++  RefreshOverlays();
++}
++
++void AiControlService::OnWillDiscardContents(
++    tabs::TabInterface* tab,
++    content::WebContents* old_contents,
++    content::WebContents* new_contents) {
++  auto it = tab_visuals_.find(tab->GetHandle().raw_value());
++  if (it == tab_visuals_.end() || it->second.ownership != "ai") {
++    return;
++  }
++  TabVisualState& state = it->second;
++  state.input_lock.reset();
++  state.locked_contents = new_contents;
++  state.input_lock = new_contents->IgnoreInputEvents(base::BindRepeating(
++      [](const blink::WebInputEvent& event) {
++        return (event.GetModifiers() & blink::WebInputEvent::kFromDebugger) !=
++               0;
++      }));
++  ++state.state_version;
++}
++
+ base::ListValue AiControlService::BuildTabsSnapshot() {
+   base::ListValue tabs;
+   for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
+     if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
+-        browser->GetProfile()->IsOffTheRecord()) {
++        browser->GetProfile()->IsOffTheRecord() ||
++        browser->GetProfile()->IsGuestSession()) {
+       continue;
+     }
+     TabStripModel* model = browser->GetTabStripModel();
+     for (int index = 0; index < model->count(); ++index) {
+       tabs::TabInterface* tab = model->GetTabAtIndex(index);
+       content::WebContents* contents = tab->GetContents();
+-      if (!contents) {
++      if (!contents || !IsEligibleContents(contents)) {
+         continue;
+       }
+       base::DictValue value;
+@@ -557,6 +844,12 @@ base::ListValue AiControlService::BuildTabsSnapshot() {
+       value.Set("active", model->GetActiveWebContents() == contents);
+       value.Set("title", base::UTF16ToUTF8(contents->GetTitle()));
+       value.Set("url", contents->GetLastCommittedURL().spec());
++      auto state_it = tab_visuals_.find(tab->GetHandle().raw_value());
++      value.Set("ownership", state_it == tab_visuals_.end()
++                                 ? "human"
++                                 : state_it->second.ownership);
++      value.Set("overlayVisible", state_it != tab_visuals_.end() &&
++                                      state_it->second.overlay_visible);
+       tabs.Append(std::move(value));
+     }
+   }
+diff --git a/chrome/browser/ai_control/ai_control_service.h b/chrome/browser/ai_control/ai_control_service.h
+index eeed35b..c0b111a 100644
+--- a/chrome/browser/ai_control/ai_control_service.h
++++ b/chrome/browser/ai_control/ai_control_service.h
+@@ -9,11 +9,14 @@
+ #include <optional>
+ #include <string>
+ 
++#include "base/callback_list.h"
+ #include "base/containers/flat_map.h"
+ #include "base/files/file_path.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/timer/timer.h"
+ #include "base/values.h"
++#include "content/public/browser/web_contents.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ 
+ namespace base {
+@@ -21,10 +24,28 @@ class CommandLine;
+ class SingleThreadTaskRunner;
+ }  // namespace base
+ 
++namespace tabs {
++class TabInterface;
++}
++
+ namespace ai_control {
+ 
+ class AiControlService {
+  public:
++  struct OverlayPresentation {
++    OverlayPresentation();
++    OverlayPresentation(const OverlayPresentation&);
++    OverlayPresentation& operator=(const OverlayPresentation&);
++    OverlayPresentation(OverlayPresentation&&);
++    OverlayPresentation& operator=(OverlayPresentation&&);
++    ~OverlayPresentation();
++
++    std::string title;
++    std::string message;
++    std::optional<int> progress;
++    bool handoff_pending = false;
++  };
++
+   static std::unique_ptr<AiControlService> CreateFromCommandLine(
+       const base::CommandLine& command_line,
+       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
+@@ -35,7 +56,10 @@ class AiControlService {
+   ~AiControlService();
+ 
+   std::optional<SkColor> GetTabColor(int32_t tab_handle) const;
++  std::optional<OverlayPresentation> GetOverlayPresentation(
++      int32_t tab_handle) const;
+   void NotifyTabClicked(int32_t tab_handle);
++  void NotifyHumanRequested(int32_t tab_handle);
+ 
+  private:
+   class IOThreadData;
+@@ -53,15 +77,36 @@ class AiControlService {
+   void SendMessage(int connection_id, base::DictValue message);
+   base::DictValue HandleCommand(const base::DictValue& request);
+   base::ListValue BuildTabsSnapshot();
++  tabs::TabInterface* FindTab(int32_t tab_handle) const;
+   bool TabExists(int32_t tab_handle) const;
+   void ScheduleTabPaint(int32_t tab_handle) const;
+   void UpdateAnimationTimer();
+   void OnAnimationTick();
++  void RefreshOverlays();
++  void ReleaseAllAiControl();
++  void OnWillDiscardContents(tabs::TabInterface* tab,
++                             content::WebContents* old_contents,
++                             content::WebContents* new_contents);
+ 
+   struct TabVisualState {
++    TabVisualState();
++    TabVisualState(TabVisualState&&);
++    TabVisualState& operator=(TabVisualState&&);
++    ~TabVisualState();
++
+     std::optional<SkColor> color;
+     std::string animation;
+     uint64_t state_version = 0;
++    bool overlay_visible = false;
++    std::string overlay_title = "AI 正在操作此页面";
++    std::string overlay_message = "操作完成后，页面控制权会自动恢复。";
++    std::optional<int> overlay_progress;
++    std::string ownership = "human";
++    bool handoff_pending = false;
++    std::string handoff_request_id;
++    raw_ptr<content::WebContents> locked_contents = nullptr;
++    std::optional<content::WebContents::ScopedIgnoreInputEvents> input_lock;
++    base::CallbackListSubscription discard_subscription;
+   };
+ 
+   const scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
+@@ -72,7 +117,9 @@ class AiControlService {
+   std::unique_ptr<IOThreadData> io_thread_data_;
+   base::flat_map<int32_t, TabVisualState> tab_visuals_;
+   base::RepeatingTimer animation_timer_;
++  base::OneShotTimer disconnect_timer_;
+   uint64_t event_seq_ = 0;
++  uint64_t next_handoff_request_id_ = 0;
+ 
+   base::WeakPtrFactory<AiControlService> weak_ptr_factory_{this};
+ };
+diff --git a/chrome/browser/ui/views/frame/contents_container_view.cc b/chrome/browser/ui/views/frame/contents_container_view.cc
+index c6b0b6b..7948f98 100644
+--- a/chrome/browser/ui/views/frame/contents_container_view.cc
++++ b/chrome/browser/ui/views/frame/contents_container_view.cc
+@@ -7,6 +7,8 @@
+ #include <memory>
+ #include <optional>
+ 
++#include "base/command_line.h"
++#include "chrome/browser/ai_control/ai_control_overlay_web_view.h"
+ #include "chrome/browser/actor/ui/actor_overlay_web_view.h"
+ #include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
+ #include "chrome/browser/enterprise/watermark/watermark_view.h"
+@@ -130,6 +132,14 @@ ContentsContainerView::ContentsContainerView(BrowserView* browser_view)
+     actor_overlay_web_view_ = AddChildView(std::move(actor_overlay_web_view));
+   }
+ 
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch("ai-control-port")) {
++    auto ai_control_overlay =
++        std::make_unique<ai_control::AiControlOverlayWebView>(
++            browser_view->browser());
++    ai_control_overlay->ObserveContainer(this);
++    AddChildView(std::move(ai_control_overlay));
++  }
++
+   if (base::FeatureList::IsEnabled(features::kGlicRegionSelectionNew)) {
+     auto glic_selection_overlay_view = std::make_unique<views::WebView>();
+     glic_selection_overlay_view->SetProperty(

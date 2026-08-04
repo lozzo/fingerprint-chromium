@@ -1,0 +1,95 @@
+From: AI Browser Control <ai-control@localhost>
+Subject: [PATCH] Test input audit permits DevTools automation
+
+The AI control overlay needs to reject physical page input while retaining
+standard CDP automation. Lock WebContents with an audit callback and verify
+that ordinary input is rejected while debugger-tagged mouse, keyboard and
+touch events are accepted.
+
+---
+ chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc | 64 +++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
+--- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
++++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
+@@ -68,6 +68,7 @@
+ #include "net/ssl/ssl_config.h"
+ #include "net/ssl/ssl_connection_status_flags.h"
+ #include "net/ssl/ssl_server_config.h"
++#include "third_party/blink/public/common/input/web_input_event.h"
+ #include "printing/buildflags/buildflags.h"
+ #include "services/network/public/cpp/network_switches.h"
+ #include "testing/gmock/include/gmock/gmock.h"
+@@ -336,6 +337,69 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+                     Not(Contains("keydown"))));
+ }
+ 
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       InputAuditAllowsDevToolsAutomation) {
++  Attach();
++  content::WebContents* web_contents =
++      chrome_test_utils::GetActiveWebContents(this);
++  ASSERT_TRUE(web_contents);
++  ASSERT_TRUE(content::EvalJs(web_contents, R"(
++      window.logs = [];
++      ['click', 'keydown', 'touchstart'].forEach((event) =>
++          window.addEventListener(event, (e) => logs.push(e.type)));
++  )").is_ok());
++
++  auto input_lock = web_contents->IgnoreInputEvents(base::BindRepeating(
++      [](const blink::WebInputEvent& event) {
++        return (event.GetModifiers() &
++                blink::WebInputEvent::kFromDebugger) != 0;
++      }));
++
++  // Test input without the debugger marker models input from the user.
++  content::SimulateMouseClick(web_contents, /*modifiers=*/0,
++                              blink::WebMouseEvent::Button::kLeft);
++  EXPECT_EQ(0, content::EvalJs(web_contents, "logs.length"));
++
++  base::DictValue params;
++  params.Set("button", "left");
++  params.Set("clickCount", 1);
++  params.Set("x", 100);
++  params.Set("y", 100);
++  params.Set("type", "mousePressed");
++  SendCommandSync("Input.dispatchMouseEvent", params.Clone());
++  ASSERT_FALSE(error());
++  params.Set("type", "mouseReleased");
++  SendCommandSync("Input.dispatchMouseEvent", std::move(params));
++  ASSERT_FALSE(error());
++
++  params = base::DictValue();
++  params.Set("type", "keyDown");
++  params.Set("key", "a");
++  SendCommandSync("Input.dispatchKeyEvent", std::move(params));
++  ASSERT_FALSE(error());
++
++  base::ListValue touch_points;
++  touch_points.Append(base::DictValue().Set("x", 150).Set("y", 150));
++  params = base::DictValue();
++  params.Set("type", "touchStart");
++  params.Set("touchPoints", std::move(touch_points));
++  SendCommandSync("Input.dispatchTouchEvent", std::move(params));
++  ASSERT_FALSE(error());
++
++  params = base::DictValue();
++  params.Set("type", "touchEnd");
++  params.Set("touchPoints", base::ListValue());
++  SendCommandSync("Input.dispatchTouchEvent", std::move(params));
++  ASSERT_FALSE(error());
++
++  const std::string events =
++      content::EvalJs(web_contents, "logs.join(' ')").ExtractString();
++  EXPECT_THAT(base::SplitString(events, " ", base::KEEP_WHITESPACE,
++                                base::SPLIT_WANT_ALL),
++              AllOf(Contains("click"), Contains("keydown"),
++                    Contains("touchstart")));
++}
++
+ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateTargetWithFocus) {
+   AttachToBrowserTarget();
+   content::WebContents* const initial_tab =
+-- 
+2.39.5
