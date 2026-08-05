@@ -167,31 +167,31 @@ diff --git a/third_party/blink/common/user_agent/user_agent_metadata.cc b/third_
 +
 +  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +
++  std::string brand_name = command_line->HasSwitch(switches::kFingerprintBrand)
++      ? base::ToLowerASCII(
++            command_line->GetSwitchValueASCII(switches::kFingerprintBrand))
++      : "";
++  std::string custom_version = command_line->HasSwitch(switches::kFingerprintBrandVersion)
++      ? command_line->GetSwitchValueASCII(switches::kFingerprintBrandVersion) : "";
++
 +  std::optional<std::string> chrome_brand = std::nullopt;
 +  std::optional<blink::UserAgentBrandVersion> additional_brand_major = std::nullopt;
 +  std::optional<blink::UserAgentBrandVersion> additional_brand_full = std::nullopt;
 +
-+  if (command_line->HasSwitch(switches::kFingerprintBrand)) {
-+    std::string brand_name = base::ToLowerASCII(
-+        command_line->GetSwitchValueASCII(switches::kFingerprintBrand));
-+    std::string custom_version = command_line->HasSwitch(switches::kFingerprintBrandVersion)
-+        ? command_line->GetSwitchValueASCII(switches::kFingerprintBrandVersion) : "";
-+
-+    if (brand_name == "chrome") {
-+      chrome_brand = kChromeDisplayName;
-+    } else if (brand_name == "edge") {
-+      std::string edge_version = custom_version.empty() ? kEdgeDefaultVersion : custom_version;
-+      additional_brand_major = {kEdgeDisplayName, GetMajorVersion(edge_version)};
-+      additional_brand_full = {kEdgeDisplayName, edge_version};
-+    } else if (brand_name == "opera") {
-+      std::string opera_version = custom_version.empty() ? kOperaDefaultVersion : custom_version;
-+      additional_brand_major = {kOperaDisplayName, GetMajorVersion(opera_version)};
-+      additional_brand_full = {kOperaDisplayName, opera_version};
-+    } else if (brand_name == "vivaldi") {
-+      std::string vivaldi_version = custom_version.empty() ? kVivaldiDefaultVersion : custom_version;
-+      additional_brand_major = {kVivaldiDisplayName, GetMajorVersion(vivaldi_version)};
-+      additional_brand_full = {kVivaldiDisplayName, vivaldi_version};
-+    }
++  if (brand_name.empty() || brand_name == "chrome") {
++    chrome_brand = kChromeDisplayName;
++  } else if (brand_name == "edge") {
++    std::string edge_version = custom_version.empty() ? kEdgeDefaultVersion : custom_version;
++    additional_brand_major = {kEdgeDisplayName, GetMajorVersion(edge_version)};
++    additional_brand_full = {kEdgeDisplayName, edge_version};
++  } else if (brand_name == "opera") {
++    std::string opera_version = custom_version.empty() ? kOperaDefaultVersion : custom_version;
++    additional_brand_major = {kOperaDisplayName, GetMajorVersion(opera_version)};
++    additional_brand_full = {kOperaDisplayName, opera_version};
++  } else if (brand_name == "vivaldi") {
++    std::string vivaldi_version = custom_version.empty() ? kVivaldiDefaultVersion : custom_version;
++    additional_brand_major = {kVivaldiDisplayName, GetMajorVersion(vivaldi_version)};
++    additional_brand_full = {kVivaldiDisplayName, vivaldi_version};
 +  }
 +
 +  metadata->brand_version_list = GenerateBrandList(

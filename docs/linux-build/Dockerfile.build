@@ -1,0 +1,43 @@
+FROM debian:bullseye
+
+# Chromium 148 Linux 构建环境（x86_64）
+# 用法见同目录 README.md
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    file \
+    fonts-dejavu-core \
+    fonts-liberation \
+    git \
+    lsb-release \
+    ninja-build \
+    p7zip-full \
+    procps \
+    python3 \
+    sudo \
+    wget \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 3.12（Chromium 148 构建脚本需要 >= 3.10；Debian 11 自带 3.9 太老）
+# 使用 python-build-standalone 独立发行版，避免编译源码
+RUN curl -sL -o /tmp/python312.tar.gz \
+      "https://github.com/astral-sh/python-build-standalone/releases/download/20250828/cpython-3.12.11%2B20250828-x86_64-unknown-linux-gnu-install_only.tar.gz" \
+    && mkdir -p /opt/python312 \
+    && tar xzf /tmp/python312.tar.gz -C /opt/python312 --strip-components=1 \
+    && rm -f /tmp/python312.tar.gz \
+    && /opt/python312/bin/python3 -m pip install --no-cache-dir websocket-client
+
+# depot_tools 的 gsutil 会调用 vpython3；Mac 版 depot_tools 的 vpython3 是 Mach-O，
+# 这里软链到本机 python3.12
+RUN ln -sf /opt/python312/bin/python3 /usr/local/bin/vpython3 \
+    && ln -sf /opt/python312/bin/python3 /usr/local/bin/python3
+
+ENV PATH=/opt/python312/bin:$PATH
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

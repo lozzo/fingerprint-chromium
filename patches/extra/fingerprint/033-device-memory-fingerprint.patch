@@ -122,14 +122,14 @@ diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/thi
 +// value otherwise.
 +float GetSpoofedDeviceMemory() {
 +  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch(switches::kFingerprintDeviceMemory)) {
++  if (command_line->HasSwitch(::switches::kFingerprintDeviceMemory)) {
 +    std::string value =
-+        command_line->GetSwitchValueASCII(switches::kFingerprintDeviceMemory);
++        command_line->GetSwitchValueASCII(::switches::kFingerprintDeviceMemory);
 +    return std::stof(value);
 +  }
-+  if (command_line->HasSwitch(switches::kFingerprint)) {
++  if (command_line->HasSwitch(::switches::kFingerprint)) {
 +    uint32_t fingerprint = static_cast<uint32_t>(
-+        std::stoull(command_line->GetSwitchValueASCII(switches::kFingerprint)));
++        std::stoull(command_line->GetSwitchValueASCII(::switches::kFingerprint)));
 +    const float kDeviceMemoryValues[] = {4.0f, 8.0f, 16.0f, 32.0f};
 +    return kDeviceMemoryValues[fingerprint % 4];
 +  }
