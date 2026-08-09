@@ -9,9 +9,12 @@ enable_reporting=false
 enable_service_discovery=false
 enable_widevine=true
 exclude_unwind_tables=true
+ffmpeg_branding="Chrome"
 google_api_key=""
 google_default_client_id=""
 google_default_client_secret=""
+# H.264/AAC support; required for sites with HTML5 players (e.g. bilibili)
+proprietary_codecs=true
 safe_browsing_mode=0
 treat_warnings_as_errors=false
 use_official_google_api_keys=false

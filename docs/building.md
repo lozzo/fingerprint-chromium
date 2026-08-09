@@ -62,6 +62,12 @@ cd build/src
 ninja -C out/Default chrome chromedriver chrome_sandbox
 ```
 
+> **H.264/AAC codecs are required.** `flags.gn` sets `proprietary_codecs=true` and
+> `ffmpeg_branding="Chrome"`. Without them, `MediaSource.isTypeSupported("video/mp4;
+> codecs=\"avc1.42E01E,mp4a.40.2\"")` returns `false`, and sites like bilibili refuse to
+> render their HTML5 player with "current browser does not support the HTML player".
+> Do not drop these two flags from `args.gn`.
+
 ## Building FAQ
 
 ### My build keeps crashing because I run out of RAM! How can I fix it?
