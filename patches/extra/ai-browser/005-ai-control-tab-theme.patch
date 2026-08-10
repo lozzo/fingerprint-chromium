@@ -1,61 +1,43 @@
 From: AI Browser Control <ai-control@localhost>
-Subject: [PATCH] Project tab colors as complete browser themes
+Subject: [PATCH] Keep AI control colors scoped to individual tabs
 
-Turn externally supplied tab colors into complete tab palettes and project the
-active tab color through a temporary per-window BrowserThemePack. This keeps
-normal, hover, selected, foreground, stroke, toolbar and omnibox colors
-coherent without changing the profile's saved theme.
+Turn externally supplied tab colors into complete per-tab palettes. Each tab
+keeps its own normal, hover, selected, foreground and stroke colors without
+changing the surrounding tab strip, toolbar, omnibox or profile theme.
 
 ---
- chrome/browser/ai_control/ai_control_service.cc       | 67 +++++++++++++++++++-
- chrome/browser/ai_control/ai_control_service.h        | 11 ++++
- chrome/browser/ui/views/frame/browser_view.cc         |  4 ++
- chrome/browser/ui/views/frame/browser_widget.cc       |  7 ++
+ chrome/browser/ai_control/ai_control_service.cc       | 22 ++++++
+ chrome/browser/ai_control/ai_control_service.h        |  1 +
  chrome/browser/ui/views/tabs/tab_style_views.cc       | 80 ++++++++++++++------
- 5 files changed, 148 insertions(+), 21 deletions(-)
+ 3 files changed, 79 insertions(+), 21 deletions(-)
 
 diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai_control/ai_control_service.cc
 --- a/chrome/browser/ai_control/ai_control_service.cc
 +++ b/chrome/browser/ai_control/ai_control_service.cc
-@@ -30,3 +30,4 @@
- #include "chrome/browser/ai_control/ai_control_overlay_web_view.h"
- #include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/themes/browser_theme_pack.h"
- #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -52,5 +53,6 @@
- #include "third_party/blink/public/common/input/web_input_event.h"
-+#include "ui/views/widget/widget.h"
- #include "url/url_constants.h"
- 
- namespace ai_control {
- namespace {
-@@ -465,8 +467,9 @@ base::DictValue AiControlService::HandleCommand(
+@@ -465,8 +465,8 @@ base::DictValue AiControlService::HandleCommand(
      TabVisualState& visual = tab_visuals_[*handle];
      visual.color = parsed_color;
      visual.animation = animation_value;
-+    UpdateThemePack(visual);
      ++visual.state_version;
 -    ScheduleTabPaint(*handle);
 +    RefreshTabTheme(*handle);
      UpdateAnimationTimer();
      result.Set("stateVersion", static_cast<double>(visual.state_version));
    } else if (*method == "Tab.clearVisual") {
-@@ -481,8 +484,9 @@ base::DictValue AiControlService::HandleCommand(
+@@ -481,8 +481,8 @@ base::DictValue AiControlService::HandleCommand(
      TabVisualState& state = tab_visuals_[*handle];
      state.color.reset();
      state.animation = "none";
-+    UpdateThemePack(state);
      ++state.state_version;
      result.Set("stateVersion", static_cast<double>(state.state_version));
 -    ScheduleTabPaint(*handle);
 +    RefreshTabTheme(*handle);
      UpdateAnimationTimer();
    } else if (*method == "Overlay.show" || *method == "Overlay.update" ||
-@@ -583,9 +587,10 @@ base::DictValue AiControlService::HandleCommand(
+@@ -583,9 +583,9 @@ base::DictValue AiControlService::HandleCommand(
        state.color = SkColorSetRGB(0x0b, 0x57, 0xd0);
        state.animation = "loading";
      }
-+    UpdateThemePack(state);
      ++state.state_version;
      result.Set("stateVersion", static_cast<double>(state.state_version));
      result.Set("ownership", state.ownership);
@@ -63,50 +45,10 @@ diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai
 +    RefreshTabTheme(*handle);
      UpdateAnimationTimer();
      RefreshOverlays();
-@@ -667,5 +673,26 @@ std::optional<SkColor> AiControlService::GetTabColor(int32_t tab_handle) const {
-   return SkColorSetA(color, static_cast<U8CPU>(SkColorGetA(color) * opacity));
- }
- 
-+CustomThemeSupplier* AiControlService::GetActiveWindowTheme(
-+    BrowserWindowInterface* browser) const {
-+  if (!browser) {
-+    return nullptr;
-+  }
-+  tabs::TabInterface* active_tab = browser->GetTabStripModel()->GetActiveTab();
-+  if (!active_tab) {
-+    return nullptr;
-+  }
-+  auto it = tab_visuals_.find(active_tab->GetHandle().raw_value());
-+  return it == tab_visuals_.end() ? nullptr : it->second.theme_pack.get();
-+}
-+
-+void AiControlService::RefreshWindowTheme(
-+    BrowserWindowInterface* browser) const {
-+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-+  if (browser_view && browser_view->GetWidget()) {
-+    browser_view->GetWidget()->ThemeChanged();
-+  }
-+}
-+
- std::optional<AiControlService::OverlayPresentation>
- AiControlService::GetOverlayPresentation(int32_t tab_handle) const {
-@@ -777,5 +806,40 @@ void AiControlService::ScheduleTabPaint(int32_t tab_handle) const {
+@@ -777,5 +777,24 @@ void AiControlService::ScheduleTabPaint(int32_t tab_handle) const {
    }
  }
  
-+void AiControlService::UpdateThemePack(TabVisualState& state) {
-+  if (!state.color.has_value()) {
-+    state.theme_pack.reset();
-+    return;
-+  }
-+  auto pack = base::MakeRefCounted<BrowserThemePack>(
-+      ui::ColorProviderKey::ThemeInitializerSupplier::ThemeType::
-+          kAutogenerated);
-+  BrowserThemePack::BuildFromColor(SkColorSetA(*state.color, SK_AlphaOPAQUE),
-+                                   pack.get());
-+  state.theme_pack = std::move(pack);
-+}
-+
 +void AiControlService::RefreshTabTheme(int32_t tab_handle) const {
 +  for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
 +    TabStripModel* model = browser->GetTabStripModel();
@@ -121,9 +63,6 @@ diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai
 +        tab->OnThemeChanged();
 +        tab->SchedulePaint();
 +      }
-+      if (model->active_index() == index) {
-+        RefreshWindowTheme(browser);
-+      }
 +      return;
 +    }
 +  }
@@ -134,77 +73,12 @@ diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai
 diff --git a/chrome/browser/ai_control/ai_control_service.h b/chrome/browser/ai_control/ai_control_service.h
 --- a/chrome/browser/ai_control/ai_control_service.h
 +++ b/chrome/browser/ai_control/ai_control_service.h
-@@ -23,5 +23,9 @@ class SingleThreadTaskRunner;
- }  // namespace base
- 
-+class BrowserThemePack;
-+class BrowserWindowInterface;
-+class CustomThemeSupplier;
-+
- namespace tabs {
- class TabInterface;
- }
-@@ -58,4 +62,7 @@ class AiControlService {
- 
-   std::optional<SkColor> GetTabColor(int32_t tab_handle) const;
-+  CustomThemeSupplier* GetActiveWindowTheme(
-+      BrowserWindowInterface* browser) const;
-+  void RefreshWindowTheme(BrowserWindowInterface* browser) const;
-   std::optional<OverlayPresentation> GetOverlayPresentation(
-       int32_t tab_handle) const;
-@@ -68,2 +76,3 @@ class AiControlService {
-  private:
-+  struct TabVisualState;
-  class IOThreadData;
-@@ -84,4 +92,6 @@ class AiControlService {
+@@ -84,4 +84,5 @@ class AiControlService {
    tabs::TabInterface* FindTab(int32_t tab_handle) const;
    bool TabExists(int32_t tab_handle) const;
    void ScheduleTabPaint(int32_t tab_handle) const;
-+  void UpdateThemePack(TabVisualState& state);
 +  void RefreshTabTheme(int32_t tab_handle) const;
    void UpdateAnimationTimer();
-@@ -111,4 +121,5 @@ class AiControlService {
-     std::optional<content::WebContents::ScopedIgnoreInputEvents> input_lock;
-     base::CallbackListSubscription discard_subscription;
-+    scoped_refptr<BrowserThemePack> theme_pack;
-   };
- 
-diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
---- a/chrome/browser/ui/views/frame/browser_view.cc
-+++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -32,4 +32,5 @@
- #include "build/build_config.h"
- #include "chrome/app/chrome_command_ids.h"
-+#include "chrome/browser/ai_control/ai_control_service.h"
- #include "chrome/browser/actor/ui/actor_overlay_web_view.h"
- #include "chrome/browser/app_mode/app_mode_utils.h"
-@@ -1940,3 +1941,6 @@ void BrowserView::OnActiveTabChanged(content::WebContents* old_contents,
-   DCHECK(new_contents);
-   TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");
-+  if (auto* service = ai_control::AiControlService::Get()) {
-+    service->RefreshWindowTheme(browser_);
-+  }
-   views::WebView* active_contents_view = GetActiveContentsWebView();
-diff --git a/chrome/browser/ui/views/frame/browser_widget.cc b/chrome/browser/ui/views/frame/browser_widget.cc
---- a/chrome/browser/ui/views/frame/browser_widget.cc
-+++ b/chrome/browser/ui/views/frame/browser_widget.cc
-@@ -15,4 +15,5 @@
- #include "base/metrics/user_metrics.h"
- #include "build/build_config.h"
-+#include "chrome/browser/ai_control/ai_control_service.h"
- #include "chrome/browser/app_mode/app_mode_utils.h"
- #include "chrome/browser/profiles/profile.h"
-@@ -330,4 +331,10 @@ ui::ColorProviderKey::ThemeInitializerSupplier* BrowserWidget::GetCustomTheme()
-     return nullptr;
-   }
- 
-+  if (auto* service = ai_control::AiControlService::Get()) {
-+    if (auto* theme =
-+            service->GetActiveWindowTheme(browser_view_->browser())) {
-+      return theme;
-+    }
-+  }
-   Browser* browser = browser_view_->browser();
 diff --git a/chrome/browser/ui/views/tabs/tab_style_views.cc b/chrome/browser/ui/views/tabs/tab_style_views.cc
 --- a/chrome/browser/ui/views/tabs/tab_style_views.cc
 +++ b/chrome/browser/ui/views/tabs/tab_style_views.cc

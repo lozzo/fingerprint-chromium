@@ -149,3 +149,4 @@ extra/ai-browser/003-ai-control-overlay.patch
 extra/ai-browser/004-ai-control-hardening.patch
 extra/ai-browser/005-ai-control-tab-theme.patch
 extra/ai-browser/006-ai-control-iridescent-overlay.patch
+extra/ai-browser/007-ai-control-custom-content.patch

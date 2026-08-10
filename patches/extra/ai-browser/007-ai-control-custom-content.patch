@@ -1,0 +1,395 @@
+From: AI Browser Control <ai-control@localhost>
+Subject: [PATCH] Add isolated custom HTML to AI control overlays
+
+Allow Overlay.show and Overlay.update callers to provide an optional HTML
+document while preserving the existing structured status panel by default.
+Custom documents render inside a sandboxed child frame with scripts, network
+access, navigation, downloads, popups, cookies and persistent storage disabled.
+
+---
+ chrome/browser/ai_control/ai_control_overlay_web_view.cc | 165 +++++++++++++++++++--
+ chrome/browser/ai_control/ai_control_overlay_web_view.h  |  39 ++++-
+ chrome/browser/ai_control/ai_control_service.cc           |  22 +++
+ chrome/browser/ai_control/ai_control_service.h            |   2 +
+ 4 files changed, 218 insertions(+), 10 deletions(-)
+
+diff --git a/chrome/browser/ai_control/ai_control_overlay_web_view.cc b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+index 9bffc53..3c52d34 100644
+--- a/chrome/browser/ai_control/ai_control_overlay_web_view.cc
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+@@ -6,10 +6,12 @@
+
+ #include <algorithm>
+ #include <string_view>
++#include <utility>
+
+ #include "base/base64.h"
+ #include "base/containers/flat_set.h"
+ #include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/no_destructor.h"
+ #include "base/strings/escape.h"
+ #include "base/strings/strcat.h"
+@@ -23,8 +25,10 @@
+ #include "chrome/browser/ui/views/frame/contents_container_view.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/page_navigator.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "url/gurl.h"
+
+@@ -94,7 +98,10 @@ void AiControlOverlayWebView::Refresh() {
+   std::string html = BuildHtml();
+   if (html != displayed_html_) {
+     displayed_html_ = html;
+-    LoadInitialURL(GURL("data:text/html;base64," + base::Base64Encode(html)));
++    displayed_document_url_ =
++        GURL("data:text/html;base64," + base::Base64Encode(html));
++    ConfigureWebContents();
++    LoadInitialURL(displayed_document_url_, HttpsUpgradePolicy::kNoUpgrade);
+   }
+   if (!GetVisible()) {
+     SetVisible(true);
+@@ -120,27 +127,95 @@ void AiControlOverlayWebView::OnTabStripModelChanged(
+
+ void AiControlOverlayWebView::DidStartNavigation(
+     content::NavigationHandle* navigation_handle) {
+-  if (navigation_handle->GetURL().ref() != "handoff") {
++  const GURL& url = navigation_handle->GetURL();
++  if (navigation_handle->IsInPrimaryMainFrame() &&
++      url == displayed_document_url_) {
+     return;
+   }
+-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+-      FROM_HERE, base::BindOnce([](int32_t tab_handle) {
+-        if (AiControlService* service = AiControlService::Get()) {
+-          service->NotifyHumanRequested(tab_handle);
+-        }
+-      }, displayed_tab_handle_));
++  if (!navigation_handle->IsInPrimaryMainFrame() &&
++      url == displayed_child_document_url_) {
++    return;
++  }
++  if (navigation_handle->IsInPrimaryMainFrame() &&
++      url.ref() == "handoff") {
++    NotifyHumanRequested();
++  }
++  if (content::WebContents* contents = web_contents()) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<content::WebContents> weak_contents) {
++              if (weak_contents) {
++                weak_contents->Stop();
++              }
++            },
++            contents->GetWeakPtr()));
++  }
+ }
+
+ void AiControlOverlayWebView::OnViewBoundsChanged(views::View* observed_view) {
+   SetBoundsRect(observed_view->GetContentsBounds());
+ }
+
+-std::string AiControlOverlayWebView::BuildHtml() const {
++content::WebContents* AiControlOverlayWebView::OpenURLFromTab(
++    content::WebContents* source,
++    const content::OpenURLParams& params,
++    base::OnceCallback<void(content::NavigationHandle&)>
++        navigation_handle_callback) {
++  if (params.url.ref() == "handoff") {
++    NotifyHumanRequested();
++  }
++  return nullptr;
++}
++
++bool AiControlOverlayWebView::HandleContextMenu(
++    content::RenderFrameHost& render_frame_host,
++    const content::ContextMenuParams& params) {
++  return true;
++}
++
++void AiControlOverlayWebView::CanDownload(
++    const GURL& url,
++    const std::string& request_method,
++    base::OnceCallback<void(bool)> callback) {
++  std::move(callback).Run(false);
++}
++
++bool AiControlOverlayWebView::IsWebContentsCreationOverridden(
++    content::RenderFrameHost* opener,
++    content::SiteInstance* source_site_instance,
++    content::mojom::WindowContainerType window_container_type,
++    const GURL& opener_url,
++    const std::string& frame_name,
++    const GURL& target_url) {
++  return true;
++}
++
++content::WebContents* AiControlOverlayWebView::CreateCustomWebContents(
++    content::RenderFrameHost* opener,
++    content::SiteInstance* source_site_instance,
++    bool is_new_browsing_instance,
++    const GURL& opener_url,
++    const std::string& frame_name,
++    const GURL& target_url,
++    WindowOpenDisposition disposition,
++    const blink::mojom::WindowFeatures& window_features,
++    const content::StoragePartitionConfig& partition_config,
++    content::SessionStorageNamespace* session_storage_namespace) {
++  return nullptr;
++}
++
++std::string AiControlOverlayWebView::BuildHtml() {
+   const auto presentation =
+       AiControlService::Get()->GetOverlayPresentation(displayed_tab_handle_);
+   if (!presentation.has_value()) {
+     return std::string();
+   }
++  if (presentation->html.has_value()) {
++    return BuildCustomHtml(*presentation->html,
++                           presentation->handoff_pending);
++  }
++  displayed_child_document_url_ = GURL();
+   const std::string progress = presentation->progress.has_value()
+                                    ? base::NumberToString(
+                                          std::clamp(*presentation->progress, 0,
+@@ -227,9 +302,81 @@ a:hover{border-color:#25d6c2;background:rgba(37,214,194,.1)}.waiting{color:#9da7
+       R"HTML(</div></div></section></main></body></html>)HTML"});
+ }
+
++std::string AiControlOverlayWebView::BuildCustomHtml(
++    std::string_view html,
++    bool handoff_pending) {
++  const std::string isolated_document = base::StrCat({
++      R"HTML(<!doctype html><html><head><meta charset="utf-8">
++<meta http-equiv="Content-Security-Policy" content="default-src 'none';
++img-src data:; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none';
++frame-src 'none'; child-src 'none'; object-src 'none'; media-src 'none';
++worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; sandbox">
++<meta name="referrer" content="no-referrer"><style>
++html,body{width:100%;min-height:100%;margin:0}body{overflow:auto}
++</style></head><body>)HTML",
++      html, R"HTML(</body></html>)HTML"});
++  displayed_child_document_url_ = GURL("about:srcdoc");
++  const std::string action =
++      handoff_pending ? "<span>已请求接管</span>"
++                      : "<a href='about:blank#handoff'>请求接管</a>";
++  return base::StrCat({
++      R"HTML(<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
++<meta http-equiv="Content-Security-Policy" content="default-src 'none';
++style-src 'unsafe-inline'; frame-src 'self'; script-src 'none'; connect-src 'none';
++object-src 'none'; form-action 'none'; base-uri 'none'">
++<meta name="referrer" content="no-referrer"><style>
++*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}
++body{display:grid;grid-template-rows:36px minmax(0,1fr);overflow:hidden;
++font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
++letter-spacing:0;background:rgba(8,11,13,.38);color:#f7faf9}
++header{display:flex;align-items:center;justify-content:space-between;gap:16px;
++padding:0 14px;background:#111517;border-bottom:1px solid rgba(255,255,255,.14);
++box-shadow:0 8px 24px rgba(0,0,0,.28);font-size:11px;font-weight:650}
++.label{display:flex;align-items:center;gap:8px}.live{width:7px;height:7px;
++border-radius:50%;background:#cdee4c;box-shadow:0 0 12px rgba(205,238,76,.7)}
++.mode{color:#a9b2af;font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
++a,header span{color:#f7faf9;text-decoration:none}iframe{width:100%;height:100%;border:0;
++background:transparent} @media(max-width:520px){.mode{display:none}}
++</style></head><body><header><div class="label"><i class="live"></i>
++<strong>AutoPush 正在使用此页面</strong><span class="mode">CUSTOM OVERLAY</span></div>
++<div>)HTML",
++      action,
++      R"HTML(</div></header><iframe title="AI 自定义状态内容" sandbox
++referrerpolicy="no-referrer" srcdoc=")HTML",
++      Escape(isolated_document),
++      R"HTML("></iframe></body></html>)HTML"});
++}
++
++void AiControlOverlayWebView::ConfigureWebContents() {
++  content::WebContents* contents = GetWebContents();
++  blink::web_pref::WebPreferences preferences =
++      contents->GetOrCreateWebPreferences();
++  preferences.javascript_enabled = false;
++  preferences.cookie_enabled = false;
++  preferences.local_storage_enabled = false;
++  preferences.plugins_enabled = false;
++  preferences.remote_fonts_enabled = false;
++  preferences.hyperlink_auditing_enabled = false;
++  preferences.allow_file_access_from_file_urls = false;
++  preferences.allow_universal_access_from_file_urls = false;
++  preferences.javascript_can_access_clipboard = false;
++  contents->SetWebPreferences(preferences);
++}
++
++void AiControlOverlayWebView::NotifyHumanRequested() {
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce([](int32_t tab_handle) {
++        if (AiControlService* service = AiControlService::Get()) {
++          service->NotifyHumanRequested(tab_handle);
++        }
++      }, displayed_tab_handle_));
++}
++
+ void AiControlOverlayWebView::HideOverlay() {
+   displayed_tab_handle_ = 0;
+   displayed_html_.clear();
++  displayed_document_url_ = GURL();
++  displayed_child_document_url_ = GURL();
+   if (GetVisible()) {
+     SetVisible(false);
+     if (web_contents()) {
+diff --git a/chrome/browser/ai_control/ai_control_overlay_web_view.h b/chrome/browser/ai_control/ai_control_overlay_web_view.h
+index 5ee8358..9ea8c85 100644
+--- a/chrome/browser/ai_control/ai_control_overlay_web_view.h
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.h
+@@ -7,6 +7,7 @@
+
+ #include <cstdint>
+ #include <string>
++#include <string_view>
+
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+@@ -14,6 +15,7 @@
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/views/controls/webview/webview.h"
+ #include "ui/views/view_observer.h"
++#include "url/gurl.h"
+
+ class BrowserWindowInterface;
+
+@@ -46,14 +48,49 @@ class AiControlOverlayWebView : public views::WebView,
+       content::NavigationHandle* navigation_handle) override;
+   void OnViewBoundsChanged(views::View* observed_view) override;
+
++  content::WebContents* OpenURLFromTab(
++      content::WebContents* source,
++      const content::OpenURLParams& params,
++      base::OnceCallback<void(content::NavigationHandle&)>
++          navigation_handle_callback) override;
++  bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
++                         const content::ContextMenuParams& params) override;
++  void CanDownload(const GURL& url,
++                   const std::string& request_method,
++                   base::OnceCallback<void(bool)> callback) override;
++  bool IsWebContentsCreationOverridden(
++      content::RenderFrameHost* opener,
++      content::SiteInstance* source_site_instance,
++      content::mojom::WindowContainerType window_container_type,
++      const GURL& opener_url,
++      const std::string& frame_name,
++      const GURL& target_url) override;
++  content::WebContents* CreateCustomWebContents(
++      content::RenderFrameHost* opener,
++      content::SiteInstance* source_site_instance,
++      bool is_new_browsing_instance,
++      const GURL& opener_url,
++      const std::string& frame_name,
++      const GURL& target_url,
++      WindowOpenDisposition disposition,
++      const blink::mojom::WindowFeatures& window_features,
++      const content::StoragePartitionConfig& partition_config,
++      content::SessionStorageNamespace* session_storage_namespace) override;
++
+  private:
+-  std::string BuildHtml() const;
++  std::string BuildHtml();
++  std::string BuildCustomHtml(std::string_view html,
++                              bool handoff_pending);
++  void ConfigureWebContents();
++  void NotifyHumanRequested();
+   void HideOverlay();
+
+   const raw_ptr<BrowserWindowInterface> browser_;
+   raw_ptr<views::View> container_ = nullptr;
+   int32_t displayed_tab_handle_ = 0;
+   std::string displayed_html_;
++  GURL displayed_document_url_;
++  GURL displayed_child_document_url_;
+   base::ScopedObservation<views::View, views::ViewObserver>
+       container_observation_{this};
+ };
+diff --git a/chrome/browser/ai_control/ai_control_service.cc b/chrome/browser/ai_control/ai_control_service.cc
+index db6d4dc..c03156b 100644
+--- a/chrome/browser/ai_control/ai_control_service.cc
++++ b/chrome/browser/ai_control/ai_control_service.cc
+@@ -63,6 +63,7 @@ constexpr char kWebSocketPath[] = "/ai-control/v1";
+ constexpr size_t kMaxMessageSize = 64 * 1024;
+ constexpr size_t kMaxOverlayTitleSize = 200;
+ constexpr size_t kMaxOverlayMessageSize = 2000;
++constexpr size_t kMaxOverlayHtmlSize = 48 * 1024;
+ constexpr int kBacklog = 8;
+
+ AiControlService* g_ai_control_service = nullptr;
+@@ -499,6 +500,7 @@ base::DictValue AiControlService::HandleCommand(
+     const std::string* title = params ? params->FindString("title") : nullptr;
+     const std::string* message =
+         params ? params->FindString("message") : nullptr;
++    const base::Value* html = params ? params->Find("html") : nullptr;
+     std::optional<int> progress =
+         params ? params->FindInt("progress") : std::nullopt;
+     if ((title && title->size() > kMaxOverlayTitleSize) ||
+@@ -507,6 +509,18 @@ base::DictValue AiControlService::HandleCommand(
+                    MakeError("INVALID_PARAMS", "Overlay text is too long"));
+       return response;
+     }
++    if (html && !html->is_none() && !html->is_string()) {
++      response.Set(
++          "error",
++          MakeError("INVALID_PARAMS", "html must be a string or null"));
++      return response;
++    }
++    if (html && html->is_string() &&
++        html->GetString().size() > kMaxOverlayHtmlSize) {
++      response.Set("error",
++                   MakeError("INVALID_PARAMS", "Overlay HTML is too long"));
++      return response;
++    }
+     if (progress.has_value() && (*progress < 0 || *progress > 100)) {
+       response.Set("error",
+                    MakeError("INVALID_PARAMS", "progress must be 0..100"));
+@@ -529,6 +543,13 @@ base::DictValue AiControlService::HandleCommand(
+       if (message) {
+         state.overlay_message = *message;
+       }
++      if (html) {
++        if (html->is_none()) {
++          state.overlay_html.reset();
++        } else {
++          state.overlay_html = html->GetString();
++        }
++      }
+       if (progress.has_value()) {
+         state.overlay_progress = *progress;
+       }
+@@ -705,6 +726,7 @@ AiControlService::GetOverlayPresentation(int32_t tab_handle) const {
+   OverlayPresentation presentation;
+   presentation.title = it->second.overlay_title;
+   presentation.message = it->second.overlay_message;
++  presentation.html = it->second.overlay_html;
+   presentation.progress = it->second.overlay_progress;
+   presentation.handoff_pending = it->second.handoff_pending;
+   return presentation;
+diff --git a/chrome/browser/ai_control/ai_control_service.h b/chrome/browser/ai_control/ai_control_service.h
+index bade0ac..fc4f90c 100644
+--- a/chrome/browser/ai_control/ai_control_service.h
++++ b/chrome/browser/ai_control/ai_control_service.h
+@@ -42,6 +42,7 @@ class AiControlService {
+
+     std::string title;
+     std::string message;
++    std::optional<std::string> html;
+     std::optional<int> progress;
+     bool handoff_pending = false;
+   };
+@@ -101,6 +102,7 @@ class AiControlService {
+     bool overlay_visible = false;
+     std::string overlay_title = "AI 正在操作此页面";
+     std::string overlay_message = "操作完成后，页面控制权会自动恢复。";
++    std::optional<std::string> overlay_html;
+     std::optional<int> overlay_progress;
+     std::string ownership = "human";
+     bool handoff_pending = false;
+--
+2.39.5
