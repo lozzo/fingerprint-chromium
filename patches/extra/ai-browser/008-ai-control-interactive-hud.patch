@@ -1,0 +1,351 @@
+--- a/chrome/browser/ai_control/ai_control_overlay_web_view.cc
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.cc
+@@ -90,10 +90,13 @@
+   }
+ 
+   displayed_tab_handle_ = tab->GetHandle().raw_value();
+-  if (!service->GetOverlayPresentation(displayed_tab_handle_).has_value()) {
++  const auto presentation =
++      service->GetOverlayPresentation(displayed_tab_handle_);
++  if (!presentation.has_value()) {
+     HideOverlay();
+     return;
+   }
++  UpdateBounds(presentation->ownership == "human");
+ 
+   std::string html = BuildHtml();
+   if (html != displayed_html_) {
+@@ -136,10 +139,7 @@
+       url == displayed_child_document_url_) {
+     return;
+   }
+-  if (navigation_handle->IsInPrimaryMainFrame() &&
+-      url.ref() == "handoff") {
+-    NotifyHumanRequested();
+-  }
++  const std::string action = std::string(url.ref());
+   if (content::WebContents* contents = web_contents()) {
+     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+         FROM_HERE,
+@@ -151,10 +151,13 @@
+             },
+             contents->GetWeakPtr()));
+   }
++  if (navigation_handle->IsInPrimaryMainFrame()) {
++    ScheduleOverlayAction(action);
++  }
+ }
+ 
+ void AiControlOverlayWebView::OnViewBoundsChanged(views::View* observed_view) {
+-  SetBoundsRect(observed_view->GetContentsBounds());
++  Refresh();
+ }
+ 
+ content::WebContents* AiControlOverlayWebView::OpenURLFromTab(
+@@ -162,9 +165,7 @@
+     const content::OpenURLParams& params,
+     base::OnceCallback<void(content::NavigationHandle&)>
+         navigation_handle_callback) {
+-  if (params.url.ref() == "handoff") {
+-    NotifyHumanRequested();
+-  }
++  ScheduleOverlayAction(std::string(params.url.ref()));
+   return nullptr;
+ }
+ 
+@@ -216,14 +217,31 @@
+                            presentation->handoff_pending);
+   }
+   displayed_child_document_url_ = GURL();
+-  const std::string progress = presentation->progress.has_value()
+-                                   ? base::NumberToString(
+-                                         std::clamp(*presentation->progress, 0,
+-                                                    100))
+-                                   : "38";
+-  const std::string action = presentation->handoff_pending
+-                                 ? "<span class='waiting'>已请求接管</span>"
+-                                 : "<a href='about:blank#handoff'>请求接管</a>";
++  const bool human_owned = presentation->ownership == "human";
++  const bool determinate = presentation->progress.has_value();
++  const std::string progress = determinate
++                                   ? base::NumberToString(std::clamp(
++                                         *presentation->progress, 0, 100))
++                                   : "32";
++  const std::string progress_label = determinate ? progress + "%" : "活动中";
++  const std::string status = human_owned
++                                 ? "人工控制"
++                                 : presentation->handoff_pending
++                                       ? "等待接管"
++                                       : "AI 运行中";
++  const std::string ownership = human_owned
++                                    ? "页面输入已开放"
++                                    : "页面输入由 AutoPush 控制";
++  const std::string action = human_owned
++                                 ? "<a class='primary' href='about:blank#resume'>交还 AI</a>"
++                                 : presentation->handoff_pending
++                                       ? "<span class='waiting'>正在交接</span>"
++                                       : "<a class='takeover' href='about:blank#handoff'>接管页面</a>";
++  const bool clear_backdrop = human_owned || backdrop_mode_ == BackdropMode::kClear;
++  const std::string backdrop_class = clear_backdrop ? "clear" : "dim";
++  const std::string dim_current = clear_backdrop ? "" : " current";
++  const std::string clear_current = clear_backdrop ? " current" : "";
++  const std::string progress_class = determinate ? "" : " indeterminate";
+   return base::StrCat({
+       R"HTML(<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+ <meta name="color-scheme" content="dark"><style>
+@@ -287,19 +305,69 @@
+ @media(max-width:520px){body{padding:16px}.panel{padding:22px 20px 18px}h1{font-size:18px}}
+ @media(prefers-reduced-motion:reduce){body:before,.spinner,main,.bar,.panel:after{animation:none}
+ .bar{transition:none}}
+-</style></head><body><main role="status" aria-live="polite"><section class="panel">
+-<div class="eyebrow"><span class="live"></span>AI AUTOMATION / LOCAL CONTROL</div>
+-<div class="top"><div class="spinner"></div><h1>)HTML",
+-      Escape(presentation->title),
+-      R"HTML(</h1></div><p>)HTML",
+-      Escape(presentation->message),
+-      R"HTML(</p><div class="progress-head"><span>执行进度</span><strong>)HTML",
++.ap-body{overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding:12px;
++font-family:-apple-system,BlinkMacSystemFont,"Noto Sans SC","Segoe UI",sans-serif;
++letter-spacing:0;color:#111827;background:transparent}.ap-body:before,.ap-body:after{display:none}
++.ap-body.dim{background:rgba(17,24,39,.16)}.ap-body.clear{background:transparent}
++.ap-hud{position:relative;z-index:1;width:min(760px,100%);padding:12px;border:1px solid #dce3eb;
++border-radius:8px;background:#fff;background-image:none;box-shadow:0 10px 30px rgba(15,23,42,.14);
++animation:none}.ap-rail{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;
++gap:12px}.ap-state{display:flex;align-items:center;gap:8px;white-space:nowrap;color:#0f8a6a;
++font-size:12px;font-weight:650}.ap-dot{width:8px;height:8px;border-radius:50%;background:#0f8a6a;
++box-shadow:0 0 0 4px rgba(15,138,106,.12);animation:ap-pulse 1.6s ease-in-out infinite}
++.human .ap-state{color:#ad650c}.human .ap-dot{background:#ad650c;
++box-shadow:0 0 0 4px rgba(173,101,12,.12);animation:none}.ap-copy{min-width:0}
++.ap-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:650;
++color:#111827}.ap-message{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;
++font-size:12px;color:#64748b}.ap-actions{display:flex;align-items:center;gap:8px}
++.ap-actions a,.ap-actions .waiting{display:inline-flex;align-items:center;justify-content:center;height:34px;
++padding:0 11px;border:1px solid #dce3eb;border-radius:6px;background:#fff;color:#334155;
++font-size:12px;font-weight:650;text-decoration:none;white-space:nowrap}.ap-actions a:hover{background:#f8fafc;
++border-color:#b8c4d1}.ap-actions .primary{border-color:#2f5bea;background:#2f5bea;color:#fff}
++.ap-actions .primary:hover{background:#244bd0;border-color:#244bd0}.ap-actions .waiting{color:#64748b;
++background:#f8fafc}.ap-meta{display:grid;grid-template-columns:minmax(160px,1fr) auto;align-items:center;
++gap:12px;margin-top:10px}.ap-activity{display:flex;align-items:center;gap:8px;color:#64748b;font-size:11px}
++.ap-track{position:relative;min-width:80px;height:3px;overflow:hidden;border-radius:2px;background:#eef2f6}
++.ap-bar{height:100%;width:)HTML",
+       progress,
+-      R"HTML(%</strong></div><div class="track"><div class="bar"></div></div>
+-<div class="footer"><div class="signal" aria-hidden="true"><i></i><i></i><i></i></div>
+-<div class="actions">)HTML",
++      R"HTML(%;border-radius:2px;background:#2f5bea}.ap-bar.indeterminate{animation:ap-activity 1.6s ease-in-out infinite}
++.ap-modes{display:inline-flex;padding:2px;border:1px solid #dce3eb;border-radius:6px;background:#f8fafc}
++.ap-modes a{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 9px;
++border-radius:4px;color:#64748b;font-size:11px;font-weight:600;text-decoration:none}.ap-modes a:hover{color:#111827}
++.ap-modes a.current{background:#fff;color:#2f5bea;box-shadow:0 1px 2px rgba(15,23,42,.08)}
++.ap-hud a:focus-visible{outline:2px solid #2f5bea;outline-offset:2px}@keyframes ap-pulse{50%{opacity:.55}}
++@keyframes ap-activity{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
++@media(max-width:620px){.ap-hud{padding:10px}.ap-rail{grid-template-columns:auto minmax(0,1fr)}
++.ap-actions{grid-column:1/-1;justify-content:flex-end}.ap-meta{grid-template-columns:1fr}.ap-modes{justify-self:end}}
++@media(prefers-reduced-motion:reduce){.ap-dot,.ap-bar.indeterminate{animation:none}
++.ap-bar.indeterminate{width:100%;opacity:.55}}
++</style></head><body class="ap-body )HTML",
++      backdrop_class,
++      R"HTML("><main class="ap-hud )HTML",
++      human_owned ? "human" : "ai",
++      R"HTML(" role="status" aria-live="polite"><div class="ap-rail"><div class="ap-state"><span class="ap-dot"></span><span>)HTML",
++      status,
++      R"HTML(</span></div><div class="ap-copy"><div class="ap-title">)HTML",
++      Escape(presentation->title),
++      R"HTML(</div><div class="ap-message">)HTML",
++      Escape(presentation->message),
++      R"HTML( · )HTML",
++      ownership,
++      R"HTML(</div></div><div class="ap-actions">)HTML",
+       action,
+-      R"HTML(</div></div></section></main></body></html>)HTML"});
++      R"HTML(</div></div><div class="ap-meta"><div class="ap-activity"><div class="ap-track"><div class="ap-bar )HTML",
++      progress_class,
++      R"HTML("></div></div><span>)HTML",
++      progress_label,
++      R"HTML(</span></div><div class="ap-modes" aria-label="页面显影"><a class=")HTML",
++      dim_current,
++      R"HTML(" aria-pressed=")HTML",
++      clear_backdrop ? "false" : "true",
++      R"HTML(" href="about:blank#backdrop-dim">半透明</a><a class=")HTML",
++      clear_current,
++      R"HTML(" aria-pressed=")HTML",
++      clear_backdrop ? "true" : "false",
++      R"HTML(" href="about:blank#backdrop-clear">全透明</a></div></div></main></body></html>)HTML"});
+ }
+ 
+ std::string AiControlOverlayWebView::BuildCustomHtml(
+@@ -363,6 +431,44 @@
+   contents->SetWebPreferences(preferences);
+ }
+ 
++void AiControlOverlayWebView::ScheduleOverlayAction(std::string action) {
++  if (action.empty()) {
++    return;
++  }
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<AiControlOverlayWebView> overlay,
++             std::string action) {
++            if (overlay) {
++              overlay->HandleOverlayAction(action);
++            }
++          },
++          weak_factory_.GetWeakPtr(), std::move(action)));
++}
++
++bool AiControlOverlayWebView::HandleOverlayAction(std::string_view action) {
++  if (action == "handoff") {
++    NotifyHumanRequested();
++    return true;
++  }
++  if (action == "resume") {
++    NotifyAiRequested();
++    return true;
++  }
++  if (action == "backdrop-dim") {
++    backdrop_mode_ = BackdropMode::kDim;
++    Refresh();
++    return true;
++  }
++  if (action == "backdrop-clear") {
++    backdrop_mode_ = BackdropMode::kClear;
++    Refresh();
++    return true;
++  }
++  return false;
++}
++
+ void AiControlOverlayWebView::NotifyHumanRequested() {
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+       FROM_HERE, base::BindOnce([](int32_t tab_handle) {
+@@ -372,6 +478,31 @@
+       }, displayed_tab_handle_));
+ }
+ 
++void AiControlOverlayWebView::NotifyAiRequested() {
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce([](int32_t tab_handle) {
++        if (AiControlService* service = AiControlService::Get()) {
++          service->NotifyAiRequested(tab_handle);
++        }
++      }, displayed_tab_handle_));
++}
++
++void AiControlOverlayWebView::UpdateBounds(bool human_owned) {
++  if (!container_) {
++    return;
++  }
++  const gfx::Rect contents_bounds = container_->GetContentsBounds();
++  if (!human_owned) {
++    SetBoundsRect(contents_bounds);
++    return;
++  }
++  const int width = std::min(784, std::max(0, contents_bounds.width() - 24));
++  const int height = std::min(132, std::max(0, contents_bounds.height() - 24));
++  SetBoundsRect(gfx::Rect(
++      contents_bounds.x() + (contents_bounds.width() - width) / 2,
++      contents_bounds.y() + 12, width, height));
++}
++
+ void AiControlOverlayWebView::HideOverlay() {
+   displayed_tab_handle_ = 0;
+   displayed_html_.clear();
+--- a/chrome/browser/ai_control/ai_control_overlay_web_view.h
++++ b/chrome/browser/ai_control/ai_control_overlay_web_view.h
+@@ -10,6 +10,7 @@
+ #include <string_view>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+@@ -78,11 +79,17 @@
+       content::SessionStorageNamespace* session_storage_namespace) override;
+ 
+  private:
++  enum class BackdropMode { kDim, kClear };
++
+   std::string BuildHtml();
+   std::string BuildCustomHtml(std::string_view html,
+                               bool handoff_pending);
+   void ConfigureWebContents();
++  void ScheduleOverlayAction(std::string action);
++  bool HandleOverlayAction(std::string_view action);
+   void NotifyHumanRequested();
++  void NotifyAiRequested();
++  void UpdateBounds(bool human_owned);
+   void HideOverlay();
+ 
+   const raw_ptr<BrowserWindowInterface> browser_;
+@@ -91,8 +98,10 @@
+   std::string displayed_html_;
+   GURL displayed_document_url_;
+   GURL displayed_child_document_url_;
++  BackdropMode backdrop_mode_ = BackdropMode::kDim;
+   base::ScopedObservation<views::View, views::ViewObserver>
+       container_observation_{this};
++  base::WeakPtrFactory<AiControlOverlayWebView> weak_factory_{this};
+ };
+ 
+ }  // namespace ai_control
+--- a/chrome/browser/ai_control/ai_control_service.cc
++++ b/chrome/browser/ai_control/ai_control_service.cc
+@@ -637,7 +637,7 @@
+     state.discard_subscription = {};
+     state.locked_contents = nullptr;
+     state.ownership = "human";
+-    state.overlay_visible = false;
++    state.overlay_visible = *method == "Control.grantHuman";
+     state.handoff_pending = false;
+     state.handoff_request_id.clear();
+     state.animation = "none";
+@@ -729,6 +729,7 @@
+   presentation.html = it->second.overlay_html;
+   presentation.progress = it->second.overlay_progress;
+   presentation.handoff_pending = it->second.handoff_pending;
++  presentation.ownership = it->second.ownership;
+   return presentation;
+ }
+ 
+@@ -768,6 +769,21 @@
+     SendMessage(*active_connection_id_, std::move(event));
+   }
+   RefreshOverlays();
++}
++
++void AiControlService::NotifyAiRequested(int32_t tab_handle) {
++  auto it = tab_visuals_.find(tab_handle);
++  if (!active_connection_id_.has_value() || it == tab_visuals_.end() ||
++      it->second.ownership != "human") {
++    return;
++  }
++  base::DictValue event;
++  event.Set("eventSeq", static_cast<double>(++event_seq_));
++  event.Set("method", "Control.aiRequested");
++  event.SetByDottedPath(
++      "params.tabId", base::StringPrintf("tab-%d", tab_handle));
++  event.SetByDottedPath("params.ownership", "human");
++  SendMessage(*active_connection_id_, std::move(event));
+ }
+ 
+ tabs::TabInterface* AiControlService::FindTab(int32_t tab_handle) const {
+--- a/chrome/browser/ai_control/ai_control_service.h
++++ b/chrome/browser/ai_control/ai_control_service.h
+@@ -45,6 +45,7 @@
+     std::optional<std::string> html;
+     std::optional<int> progress;
+     bool handoff_pending = false;
++    std::string ownership = "human";
+   };
+ 
+   static std::unique_ptr<AiControlService> CreateFromCommandLine(
+@@ -61,6 +62,7 @@
+       int32_t tab_handle) const;
+   void NotifyTabClicked(int32_t tab_handle);
+   void NotifyHumanRequested(int32_t tab_handle);
++  void NotifyAiRequested(int32_t tab_handle);
+ 
+  private:
+   class IOThreadData;

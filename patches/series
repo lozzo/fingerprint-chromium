@@ -113,7 +113,7 @@ extra/ungoogled-chromium/disable-ai-search-shortcuts.patch
 extra/ungoogled-chromium/disable-fedcm-by-default.patch
 
 extra/fingerprint/000-add-fingerprint-switches.patch
-extra/fingerprint/001-disable-runtime.enable.patch
+extra/fingerprint/001-disable-runtime-enable.patch
 extra/fingerprint/002-user-agent-fingerprint.patch
 extra/fingerprint/003-audio-fingerprint.patch
 extra/fingerprint/005-hardware-concurrency-fingerprint.patch
@@ -150,3 +150,4 @@ extra/ai-browser/004-ai-control-hardening.patch
 extra/ai-browser/005-ai-control-tab-theme.patch
 extra/ai-browser/006-ai-control-iridescent-overlay.patch
 extra/ai-browser/007-ai-control-custom-content.patch
+extra/ai-browser/008-ai-control-interactive-hud.patch
